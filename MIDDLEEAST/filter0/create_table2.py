@@ -1,10 +1,6 @@
 """
 Ultra-Fast Flight CSV -> DuckDB Loader
 Optimized for 5M+ rows
-Compatible with older DuckDB versions
-
-Requirements:
-    pip install duckdb pandas
 """
 
 import duckdb
@@ -20,7 +16,9 @@ from pathlib import Path
 # CONFIG
 # ============================================================================
 
-CSV_FILE_PATH = r"C:\Users\cagri\Desktop\Agency\MiddleEast\Filter-0\merged_MiddleEast.csv"
+CSV_FILE_PATH = (
+    r"C:\Users\cagri\Desktop\Agency\MiddleEast\Filter-0\merged_MiddleEast.csv"
+)
 
 DATABASE_DIR = Path(r"C:\DuckDB")
 DATABASE_NAME = "my_db.duckdb"
@@ -33,7 +31,6 @@ CHUNK_SIZE = 1_000_000
 
 DELIMITER = None
 
-# Avoid expensive pre-scan
 MAX_FLIGHTS = 4
 MAX_DATES = 4
 MAX_AIRPORTS = 5
@@ -41,278 +38,227 @@ MAX_AIRPORTS = 5
 # ============================================================================
 
 MONTH_MAP = {
-    'JAN': 1,
-    'FEB': 2,
-    'MAR': 3,
-    'APR': 4,
-    'MAY': 5,
-    'JUN': 6,
-    'JUL': 7,
-    'AUG': 8,
-    'SEP': 9,
-    'OCT': 10,
-    'NOV': 11,
-    'DEC': 12
+    "JAN": 1,
+    "FEB": 2,
+    "MAR": 3,
+    "APR": 4,
+    "MAY": 5,
+    "JUN": 6,
+    "JUL": 7,
+    "AUG": 8,
+    "SEP": 9,
+    "OCT": 10,
+    "NOV": 11,
+    "DEC": 12,
 }
 
 BASE_COLS = [
-    'DAIS',
-    'TRNN',
-    'TDNR',
-    'TRNC',
-    'STAT',
-    'PNRR',
-    'Class',
-    'FareBasis',
-    'FirstSectordate',
-    'LastSectordate',
-    'PaxName',
-    'AirlineName',
-    'AirlineCode',
-    '_SourceFile',
-    '_SourceSheet'
+    "DAIS",
+    "TRNN",
+    "TDNR",
+    "TRNC",
+    "STAT",
+    "PNRR",
+    "Class",
+    "FareBasis",
+    "FirstSectordate",
+    "LastSectordate",
+    "PaxName",
+    "AirlineName",
+    "AirlineCode",
+    "_SourceFile",
+    "_SourceSheet",
 ]
 
 # ============================================================================
 # PRECOMPILED REGEX
 # ============================================================================
 
-RE_FLIGHT_NO = re.compile(r'[A-Z]{2}-?\d+')
-RE_FULL_DATE = re.compile(r'^(\d{1,2})/(\d{1,2})/(\d{4})')
-RE_SHORT_DATE = re.compile(r'^(\d{1,2})([A-Z]{3})$')
-RE_DATE_TOKEN = re.compile(r'\d{1,2}[A-Z]{3}')
+RE_FLIGHT_NO = re.compile(r"[A-Z]{2}-?\d+")
+RE_FULL_DATE = re.compile(r"^(\d{1,2})/(\d{1,2})/(\d{4})")  # MM/DD/YYYY or M/D/YYYY
+RE_ISO_DATE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})")  # YYYY-MM-DD...
+RE_SHORT_DATE = re.compile(r"^(\d{1,2})\s*([A-Z]{3})$")  # 12FEB or "12 FEB"
+RE_DATE_TOKEN = re.compile(r"\d{1,2}\s*[A-Z]{3}")  # tokens inside multi-date strings
 
 # ============================================================================
-# HELPERS
+# YEAR EXTRACTION  (THE KEY FIX)
 # ============================================================================
 
-def extract_year(s):
 
-    try:
-        y = s[6:10]
-
-        if y.isdigit():
-            return int(y)
-
+def extract_year_from_datestr(s):
+    """
+    Robustly extract the year from any of these formats:
+      - YYYY-MM-DD [HH:MM:SS]   e.g. "2020-01-07 00:00:00"
+      - MM/DD/YYYY [H:MM]       e.g. "1/7/2020 0:00"
+      - DD-MMM-YYYY             e.g. "07-JAN-2020"
+    Returns int year or None.
+    """
+    if not s:
         return None
 
-    except:
-        return None
+    s = s.strip()
 
-def parse_flight_date(date_str, first_sector_date_str, dais_str):
+    # ISO: YYYY-MM-DD
+    m = RE_ISO_DATE.match(s)
+    if m:
+        return int(m.group(1))
 
+    # MM/DD/YYYY
+    m = RE_FULL_DATE.match(s)
+    if m:
+        return int(m.group(3))  # group(3) is the 4-digit year
+
+    # DD-MMM-YYYY  (less common but handle it)
+    m = re.match(r"(\d{1,2})-[A-Z]{3}-(\d{4})", s)
+    if m:
+        return int(m.group(2))
+
+    return None
+
+
+# ============================================================================
+# DATE PARSING
+# ============================================================================
+
+
+def parse_flight_date(date_str, ref_year):
+    """
+    Parse a single flight date token into YYYY-MM-DD 00:00:00.
+    ref_year is the authoritative year taken from FirstSectordate.
+    """
     date_str = date_str.strip()
 
-    # Already correct format
-    # 2026-02-09 00:00:00
-    if (
-        len(date_str) >= 19
-        and date_str[4] == '-'
-        and date_str[7] == '-'
-    ):
-        return date_str[:19]
+    if not date_str:
+        return None
+
+    # Already ISO: 2026-02-09 00:00:00  →  keep as-is but override year
+    m = RE_ISO_DATE.match(date_str)
+    if m:
+        y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        if ref_year:
+            y = ref_year  # always trust the booking year
+        return f"{y}-{mo:02d}-{d:02d} 00:00:00"
 
     # MM/DD/YYYY
     m = RE_FULL_DATE.match(date_str)
-
     if m:
+        mo, d, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        if ref_year:
+            y = ref_year
+        return f"{y}-{mo:02d}-{d:02d} 00:00:00"
 
-        month, day, year = m.groups()
-
-        correct_year = extract_year(first_sector_date_str)
-
-        if correct_year and abs(int(year) - correct_year) > 2:
-            year = str(correct_year)
-
-        return (
-            f"{year}-"
-            f"{int(month):02d}-"
-            f"{int(day):02d} 00:00:00"
-        )
-
-    # DDMMM
+    # DDMMM or "DD MMM"  (year is always missing here)
     m = RE_SHORT_DATE.match(date_str)
-
     if m:
+        d = int(m.group(1))
+        mon = m.group(2).upper()
+        mo = MONTH_MAP.get(mon, 1)
+        y = ref_year or 2025
+        return f"{y}-{mo:02d}-{d:02d} 00:00:00"
 
-        day, mon = m.groups()
-
-        year = (
-            extract_year(first_sector_date_str)
-            or extract_year(dais_str)
-            or 2025
-        )
-
-        month = MONTH_MAP.get(mon, 1)
-
-        return (
-            f"{year}-"
-            f"{month:02d}-"
-            f"{int(day):02d} 00:00:00"
-        )
-
+    # Couldn't parse — return raw so nothing is silently lost
     return date_str
 
 
-def split_flight_nos(raw):
-
-    return [
-        x.replace('-', '')
-        for x in RE_FLIGHT_NO.findall(raw)
-    ]
-
-
-def split_flight_dates(raw, first_sector_date_str, dais_str):
-
+def split_flight_dates(raw, ref_year):
     raw = raw.strip()
-
-    if RE_FULL_DATE.match(raw):
-
-        return [
-            parse_flight_date(
-                raw,
-                first_sector_date_str,
-                dais_str
-            )
-        ]
-
-    tokens = RE_DATE_TOKEN.findall(raw)
-
-    if tokens:
-
-        return [
-            parse_flight_date(
-                t,
-                first_sector_date_str,
-                dais_str
-            )
-            for t in tokens
-        ]
-
-    return [
-        parse_flight_date(
-            raw,
-            first_sector_date_str,
-            dais_str
-        )
-    ]
-
-
-def split_sectors(raw):
-
-    raw = raw.strip()
-
     if not raw:
         return []
 
+    # Single full date
+    if RE_FULL_DATE.match(raw) or RE_ISO_DATE.match(raw):
+        return [parse_flight_date(raw, ref_year)]
+
+    # Multiple short tokens: "07JAN 09JAN" or "12 FEB 04 APR"
+    tokens = RE_DATE_TOKEN.findall(raw)
+    if tokens:
+        # Normalise "12 FEB" → "12FEB"
+        tokens = [t.replace(" ", "") for t in tokens]
+        return [parse_flight_date(t, ref_year) for t in tokens]
+
+    return [parse_flight_date(raw, ref_year)]
+
+
+# ============================================================================
+# FLIGHT / SECTOR HELPERS  (unchanged)
+# ============================================================================
+
+
+def split_flight_nos(raw):
+    return [x.replace("-", "") for x in RE_FLIGHT_NO.findall(raw)]
+
+
+def split_sectors(raw):
+    raw = raw.strip()
+    if not raw:
+        return []
     tokens = raw.split()
-
-    # ORIG/DEST format
-    if '/' in tokens[0]:
-
+    if "/" in tokens[0]:
         airports = []
-
         for token in tokens:
-
-            parts = token.split('/')
-
+            parts = token.split("/")
             if len(parts) == 2:
-
                 if not airports:
                     airports.append(parts[0])
-
                 airports.append(parts[1])
-
         return airports
-
     return tokens
 
 
 def detect_delimiter(csv_path):
-
-    with open(csv_path, newline='', encoding='utf-8-sig') as f:
-
+    with open(csv_path, newline="", encoding="utf-8-sig") as f:
         sample = f.read(4096)
-
     sniffer = csv.Sniffer()
-
     try:
-
-        dialect = sniffer.sniff(
-            sample,
-            delimiters=',\t|;'
-        )
-
+        dialect = sniffer.sniff(sample, delimiters=",\t|;")
         return dialect.delimiter
-
     except:
-
-        return ','
+        return ","
 
 
 # ============================================================================
-# BUILD SCHEMA
+# SCHEMA
 # ============================================================================
+
 
 def build_all_cols():
-
+    # id is added at the DB level via DEFAULT gen_random_uuid(), not in Python
     return (
         BASE_COLS
-        + [f'FlightNo{i+1}' for i in range(MAX_FLIGHTS)]
-        + [f'FlightDate{i+1}' for i in range(MAX_DATES)]
-        + [f'Airport{i+1}' for i in range(MAX_AIRPORTS)]
+        + [f"FlightNo{i + 1}" for i in range(MAX_FLIGHTS)]
+        + [f"FlightDate{i + 1}" for i in range(MAX_DATES)]
+        + [f"Airport{i + 1}" for i in range(MAX_AIRPORTS)]
     )
 
 
 def process_row(row, all_cols):
-
     get = row.get
 
-    first_sector = (get('FirstSectordate') or '').strip()
+    first_sector = (get("FirstSectordate") or "").strip()
+    dais = (get("DAIS") or "").strip()
 
-    dais = (get('DAIS') or '').strip()
-
-    fn = split_flight_nos(
-        (get('FlightNo') or '').strip()
-    )
-
-    fd = split_flight_dates(
-        (get('FlightDate') or '').strip(),
-        first_sector,
+    # ── Year: prefer FirstSectordate, fall back to DAIS ──────────────────────
+    ref_year = extract_year_from_datestr(first_sector) or extract_year_from_datestr(
         dais
     )
 
-    ap = split_sectors(
-        (get('Sector') or '').strip()
-    )
+    fn = split_flight_nos((get("FlightNo") or "").strip())
+    fd = split_flight_dates((get("FlightDate") or "").strip(), ref_year)
+    ap = split_sectors((get("Sector") or "").strip())
 
     values = {}
-
-    # Base columns
     for c in BASE_COLS:
-
         v = get(c)
+        values[c] = v.strip() if isinstance(v, str) else v
 
-        values[c] = (
-            v.strip()
-            if isinstance(v, str)
-            else v
-        )
-
-    # FlightNos
     for i, v in enumerate(fn[:MAX_FLIGHTS]):
+        values[f"FlightNo{i + 1}"] = v
 
-        values[f'FlightNo{i+1}'] = v
-
-    # FlightDates
     for i, v in enumerate(fd[:MAX_DATES]):
+        values[f"FlightDate{i + 1}"] = v
 
-        values[f'FlightDate{i+1}'] = v
-
-    # Airports
     for i, v in enumerate(ap[:MAX_AIRPORTS]):
-
-        values[f'Airport{i+1}'] = v
+        values[f"Airport{i + 1}"] = v
 
     return [values.get(c) for c in all_cols]
 
@@ -321,154 +267,97 @@ def process_row(row, all_cols):
 # MAIN
 # ============================================================================
 
+
 def main():
-
     csv_path = str(Path(CSV_FILE_PATH).resolve())
-
     db_path = str(Path(DB_PATH).resolve())
 
     if not Path(csv_path).exists():
-
         print(f"ERROR: File not found -> {csv_path}")
-
         return
 
     delimiter = DELIMITER or detect_delimiter(csv_path)
 
-    print(f"\n{'='*70}")
+    print(f"\n{'=' * 70}")
     print("ULTRA FAST CSV -> DUCKDB LOADER")
-    print(f"{'='*70}")
+    print(f"{'=' * 70}")
     print(f"CSV       : {csv_path}")
     print(f"Database  : {db_path}")
     print(f"Table     : {TABLE_NAME}")
     print(f"Delimiter : {repr(delimiter)}")
-    print(f"{'='*70}\n")
+    print(f"{'=' * 70}\n")
 
     start_total = time.time()
 
-    # =========================================================================
-    # CONNECT
-    # =========================================================================
-
     con = duckdb.connect(db_path)
-
-    # Performance settings
     con.execute(f"PRAGMA threads={os.cpu_count()}")
-
     try:
         con.execute("SET memory_limit='16GB'")
     except:
         pass
 
-    # =========================================================================
-    # CREATE TABLE
-    # =========================================================================
-
+    # ── Create table with UUID primary key ───────────────────────────────────
     all_cols = build_all_cols()
-
-    print(f"Creating table ({len(all_cols)} columns)...")
+    print(f"Creating table ({len(all_cols)} data columns + id UUID)...")
 
     con.execute(f'DROP TABLE IF EXISTS "{TABLE_NAME}"')
 
-    col_defs = ', '.join(
-        [f'"{c}" VARCHAR' for c in all_cols]
-    )
+    col_defs = ", ".join([f'"{c}" VARCHAR' for c in all_cols])
+    con.execute(f"""
+        CREATE TABLE "{TABLE_NAME}" (
+            id  UUID DEFAULT gen_random_uuid(),
+            {col_defs}
+        )
+    """)
 
-    con.execute(
-        f'CREATE TABLE "{TABLE_NAME}" ({col_defs})'
-    )
-
-    # =========================================================================
-    # LOAD CSV
-    # =========================================================================
-
+    # ── Load ─────────────────────────────────────────────────────────────────
     inserted = 0
-
     batch = []
-
     start_insert = time.time()
-
     print("Loading rows...\n")
 
-    with open(csv_path, newline='', encoding='utf-8-sig') as f:
-
-        reader = csv.DictReader(
-            f,
-            delimiter=delimiter
-        )
+    with open(csv_path, newline="", encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f, delimiter=delimiter)
 
         for row in reader:
-
-            batch.append(
-                process_row(row, all_cols)
-            )
+            batch.append(process_row(row, all_cols))
 
             if len(batch) >= CHUNK_SIZE:
-
-                batch_df = pd.DataFrame(
-                    batch,
-                    columns=all_cols
+                batch_df = pd.DataFrame(batch, columns=all_cols)
+                # Let DuckDB fill id automatically via DEFAULT
+                col_list = ", ".join(f'"{c}"' for c in all_cols)
+                con.execute(
+                    f'INSERT INTO "{TABLE_NAME}" ({col_list}) SELECT * FROM batch_df'
                 )
-
-                con.append(
-                    TABLE_NAME,
-                    batch_df
-                )
-
                 inserted += len(batch)
-
                 elapsed = time.time() - start_insert
-
-                rate = (
-                    inserted / elapsed
-                    if elapsed > 0
-                    else 0
-                )
-
-                print(
-                    f"{inserted:>12,} rows   "
-                    f"{rate:>10,.0f} rows/sec"
-                )
-
+                rate = inserted / elapsed if elapsed > 0 else 0
+                print(f"{inserted:>12,} rows   {rate:>10,.0f} rows/sec")
                 batch.clear()
 
-        # Final batch
         if batch:
-
-            batch_df = pd.DataFrame(
-                batch,
-                columns=all_cols
+            batch_df = pd.DataFrame(batch, columns=all_cols)
+            col_list = ", ".join(f'"{c}"' for c in all_cols)
+            con.execute(
+                f'INSERT INTO "{TABLE_NAME}" ({col_list}) SELECT * FROM batch_df'
             )
-
-            con.append(
-                TABLE_NAME,
-                batch_df
-            )
-
             inserted += len(batch)
 
-    # =========================================================================
-    # VERIFY
-    # =========================================================================
-
-    count = con.execute(
-        f'SELECT COUNT(*) FROM "{TABLE_NAME}"'
-    ).fetchone()[0]
-
+    # ── Verify ───────────────────────────────────────────────────────────────
+    count = con.execute(f'SELECT COUNT(*) FROM "{TABLE_NAME}"').fetchone()[0]
     con.close()
 
     elapsed_total = time.time() - start_total
 
-    print(f"\n{'='*70}")
+    print(f"\n{'=' * 70}")
     print("DONE")
-    print(f"{'='*70}")
+    print(f"{'=' * 70}")
     print(f"Inserted Rows : {inserted:,}")
     print(f"Verified Rows : {count:,}")
     print(f"Elapsed Time  : {elapsed_total:.1f} sec")
     print(f"Rows / Second : {inserted / elapsed_total:,.0f}")
-    print(f"{'='*70}")
+    print(f"{'=' * 70}")
 
 
-if __name__ == '__main__':
-
+if __name__ == "__main__":
     main()
