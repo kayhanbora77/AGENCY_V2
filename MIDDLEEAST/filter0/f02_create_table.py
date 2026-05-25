@@ -19,18 +19,10 @@ from pathlib import Path
 CSV_FILE_PATH = (
     r"C:\Users\cagri\Desktop\Agency\MiddleEast\Filter-0\merged_MiddleEast.csv"
 )
-
-DATABASE_DIR = Path(r"C:\DuckDB")
-DATABASE_NAME = "my_db.duckdb"
-
-DB_PATH = DATABASE_DIR / DATABASE_NAME
-
+DB_PATH = r"C:\DuckDB\my_db.duckdb"
 TABLE_NAME = "MIDDLEEAST_RAW"
-
 CHUNK_SIZE = 1_000_000
-
 DELIMITER = None
-
 MAX_FLIGHTS = 4
 MAX_DATES = 4
 MAX_AIRPORTS = 5

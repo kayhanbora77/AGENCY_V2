@@ -1,14 +1,15 @@
 """
 Flight Row Splitter  —  optimized for 5M+ rows
 ================================================
-Reads MIDDLEEAST_RAW in chunks via fetchdf() (no OFFSET scan),
-processes splits in Python, bulk-inserts children via pandas→DuckDB.
+Reads MIDDLEEAST_RAW in chunks via fetchmany() (no OFFSET scan),
+processes splits in Python, bulk-inserts parent + children into MIDDLEEAST_SPLIT.
 
 Rules
 -----
-1. Round-trip  : Airport1 == AirportLast  → split at every turnaround point
-2. One-way / connecting (ALL consecutive date gaps ≤ 1 day) → do NOT split
-3. One-way / with gap   (ANY consecutive date gap  > 1 day) → split at gaps
+1. Airport1 == Airport3 OR Airport1 == Airport5 → always split  (NEW)
+2. Round-trip  : Airport1 == AirportLast         → split at every turnaround point
+3. One-way / connecting (ALL consecutive date gaps ≤ 1 day) → do NOT split
+4. One-way / with gap   (ANY consecutive date gap  > 1 day) → split at gaps
 """
 
 import duckdb
@@ -23,27 +24,25 @@ from datetime import datetime
 # ============================================================================
 
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
-TABLE_NAME = "MIDDLEEAST_RAW"
+SOURCE_TABLE = "MIDDLEEAST_RAW"
+TARGET_TABLE = "MIDDLEEAST_SPLIT"
 
 MAX_FLIGHTS = 4
 MAX_DATES = 4
 MAX_AIRPORTS = 5
 
-# Tune to taste: larger = fewer round-trips, more RAM
 BATCH_SIZE = 200_000
 
 # ============================================================================
-# COLUMN LISTS  (built once at module level)
+# COLUMN LISTS
 # ============================================================================
 
 FLIGHT_COLS = [f"FlightNo{i + 1}" for i in range(MAX_FLIGHTS)]
 DATE_COLS = [f"FlightDate{i + 1}" for i in range(MAX_DATES)]
 AIRPORT_COLS = [f"Airport{i + 1}" for i in range(MAX_AIRPORTS)]
 
-DYNAMIC_COLS = FLIGHT_COLS + DATE_COLS + AIRPORT_COLS  # columns zeroed in children
+DYNAMIC_COLS = FLIGHT_COLS + DATE_COLS + AIRPORT_COLS
 
-# Pre-build column index maps (used instead of dict lookups in hot loop)
-# Populated after we know all_cols from the DB.
 COL_IDX: dict = {}
 
 # ============================================================================
@@ -52,7 +51,6 @@ COL_IDX: dict = {}
 
 
 def parse_dt(val):
-    """Return datetime or None — fast path for already-parsed datetime objects."""
     if val is None:
         return None
     if isinstance(val, datetime):
@@ -76,28 +74,21 @@ def day_gap(d1, d2):
 def is_valid(val):
     if val is None:
         return False
-    if isinstance(val, float):  # catches NaN / inf from pandas
+    if isinstance(val, float):
         import math
 
         return not math.isnan(val)
     if isinstance(val, str):
         return val.strip() != ""
-    return True  # datetime, int, etc.
+    return True
 
 
 # ============================================================================
-# ROW-LEVEL SPLIT LOGIC  (operates on plain lists for speed)
+# ROW-LEVEL SPLIT LOGIC
 # ============================================================================
 
 
 def get_flights_airports(row_list):
-    """
-    Extract (flights, airports) from a row represented as a plain list.
-    Uses pre-built COL_IDX for O(1) access instead of dict lookups.
-    Returns:
-        flights  : list of (FlightNo str, FlightDate str)  — both valid
-        airports : list of airport code strings
-    """
     flights = []
     for i in range(MAX_FLIGHTS):
         fn = row_list[COL_IDX[f"FlightNo{i + 1}"]]
@@ -118,8 +109,12 @@ def get_flights_airports(row_list):
 
 def find_all_split_points(flights, airports):
     """
-    Return sorted list of split indices in the flights array.
-    Empty → no split.
+    Rules:
+    1. Round-trip (Airport1 == AirportLast):
+         a. Split at every interior airport that matches origin
+         b. No interior match → out-and-back with stopover:
+            split at midpoint (covers Airport1==Airport3 and Airport1==Airport5 cases)
+    2. Date gap > 1 day → split at that flight boundary
     """
     n_f = len(flights)
     n_a = len(airports)
@@ -129,14 +124,24 @@ def find_all_split_points(flights, airports):
 
     split_points = set()
 
-    # Rule 1: round-trip — interior airport matches origin
+    # ── Rule 1: round-trip (Airport1 == AirportLast) ─────────────────────────
     if n_a >= 3 and airports[-1] == airports[0]:
         origin = airports[0]
-        for j in range(1, n_a - 1):
-            if airports[j] == origin:
-                split_points.add(j)
 
-    # Rule 3: date gap > 1 day
+        interior_matches = [j for j in range(1, n_a - 1) if airports[j] == origin]
+        for j in interior_matches:
+            split_points.add(j)
+
+        # No interior airport matches → out-and-back with stopover
+        # e.g. ELQ→RUH→GIZ→RUH→ELQ  mid=2 → ELQ→RUH→GIZ | GIZ→RUH→ELQ
+        # e.g. MED→JED→TUU→RUH→MED  mid=2 → MED→JED→TUU | TUU→RUH→MED
+        # e.g. AAA→BBB→AAA           mid=1 → AAA→BBB | BBB→AAA
+        if not interior_matches:
+            mid = n_a // 2
+            if mid < n_f:
+                split_points.add(mid)
+
+    # ── Rule 2: date gap > 1 day ─────────────────────────────────────────────
     for i in range(n_f - 1):
         gap = day_gap(flights[i][1], flights[i + 1][1])
         if gap is not None and gap > 1:
@@ -146,22 +151,15 @@ def find_all_split_points(flights, airports):
 
 
 def build_child_list(parent_list, all_cols, flights_slice, airports_slice, parent_id):
-    """
-    Clone parent_list, overwrite dynamic columns with the segment slice,
-    assign new id and ParentId.  Returns a plain list (same order as all_cols).
-    """
-    child = list(parent_list)  # shallow copy — fast
+    child = list(parent_list)
 
-    # Zero out all dynamic columns
     for c in DYNAMIC_COLS:
         child[COL_IDX[c]] = None
 
-    # Fill flight slice
     for i, (fn, fd) in enumerate(flights_slice):
         child[COL_IDX[f"FlightNo{i + 1}"]] = fn
         child[COL_IDX[f"FlightDate{i + 1}"]] = fd
 
-    # Fill airport slice
     for i, ap in enumerate(airports_slice):
         child[COL_IDX[f"Airport{i + 1}"]] = ap
 
@@ -173,18 +171,26 @@ def build_child_list(parent_list, all_cols, flights_slice, airports_slice, paren
 
 def process_batch(rows_df, all_cols):
     """
-    Takes a pandas DataFrame batch.
-    Returns a DataFrame of NEW child rows to insert (may be empty).
-    """
-    children = []
+    Option C: SPLIT is fully self-contained.
+    - Rows with NO split → copied as-is into SPLIT
+    - Rows WITH a split  → only their children go into SPLIT (parent is NOT copied)
 
-    records = rows_df.values.tolist()  # convert once to list-of-lists
+    Returns:
+        unsplit_df  — rows that need no splitting (pass-through)
+        children_df — child segment rows (ParentId set)
+    """
+    unsplit_rows = []
+    child_rows = []
+
+    records = rows_df.values.tolist()
 
     for row_list in records:
         flights, airports = get_flights_airports(row_list)
         split_points = find_all_split_points(flights, airports)
 
         if not split_points:
+            # No split → row goes to SPLIT as-is
+            unsplit_rows.append(list(row_list))
             continue
 
         parent_id = row_list[COL_IDX["id"]]
@@ -204,16 +210,17 @@ def process_batch(rows_df, all_cols):
             if not seg_flights:
                 continue
 
-            children.append(
+            child_rows.append(
                 build_child_list(
                     row_list, all_cols, seg_flights, seg_airports, parent_id
                 )
             )
 
-    if not children:
-        return pd.DataFrame(columns=all_cols)
+    empty = pd.DataFrame(columns=all_cols)
+    unsplit_df = pd.DataFrame(unsplit_rows, columns=all_cols) if unsplit_rows else empty
+    children_df = pd.DataFrame(child_rows, columns=all_cols) if child_rows else empty
 
-    return pd.DataFrame(children, columns=all_cols)
+    return unsplit_df, children_df
 
 
 # ============================================================================
@@ -236,15 +243,23 @@ def ensure_parent_id_column(con, table):
         print("  Added ParentId column.")
 
 
+def ensure_target_table(con, source_table, target_table):
+    """Drop if exists, then recreate with same schema as source."""
+    con.execute(f'DROP TABLE IF EXISTS "{target_table}"')
+    con.execute(
+        f'CREATE TABLE "{target_table}" AS SELECT * FROM "{source_table}" WHERE 1=0'
+    )
+    print(f"  Recreated target table '{target_table}'.")
+
+
 # ============================================================================
 # MAIN
 # ============================================================================
 
 
-def process_table(db_path=DB_PATH, table=TABLE_NAME, batch_size=BATCH_SIZE):
+def process_table(db_path=DB_PATH, table=SOURCE_TABLE, batch_size=BATCH_SIZE):
     con = duckdb.connect(db_path)
 
-    # Performance knobs
     con.execute(f"PRAGMA threads={os.cpu_count()}")
     try:
         con.execute("SET memory_limit='16GB'")
@@ -252,68 +267,68 @@ def process_table(db_path=DB_PATH, table=TABLE_NAME, batch_size=BATCH_SIZE):
         pass
 
     ensure_parent_id_column(con, table)
+    ensure_target_table(con, table, TARGET_TABLE)  # NEW: auto-create target if missing
 
     all_cols = col_names(con, table)
 
-    # Build global index map once
     global COL_IDX
     COL_IDX = {c: i for i, c in enumerate(all_cols)}
 
     col_list = ", ".join(f'"{c}"' for c in all_cols)
     total = con.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
 
-    print(f"\n{'=' * 65}")
-    print(f"FLIGHT ROW SPLITTER  —  {total:,} rows")
-    print(f"{'=' * 65}")
-
-    processed = 0
+    unsplit_total = 0
     split_count = 0
     child_count = 0
     t0 = time.time()
 
-    # ── Stream via fetchmany on a single cursor (no OFFSET scan) ─────────────
     cursor = con.cursor()
     cursor.execute(f'SELECT {col_list} FROM "{table}" WHERE "ParentId" IS NULL')
 
     while True:
-        # fetchmany returns list-of-tuples; wrap in DataFrame for bulk insert
         raw = cursor.fetchmany(batch_size)
         if not raw:
             break
 
         batch_df = pd.DataFrame(raw, columns=all_cols)
-        children_df = process_batch(batch_df, all_cols)
+        unsplit_df, children_df = process_batch(batch_df, all_cols)
 
-        n_splits = children_df["ParentId"].notna().any() and len(
-            children_df["ParentId"].unique()
-        )
+        if not unsplit_df.empty:
+            con.execute(
+                f'INSERT INTO "{TARGET_TABLE}" ({col_list}) SELECT * FROM unsplit_df'
+            )
+            unsplit_total += len(unsplit_df)
 
         if not children_df.empty:
-            # Bulk insert via DuckDB's zero-copy DataFrame reader
-            con.execute(f'INSERT INTO "{table}" ({col_list}) SELECT * FROM children_df')
+            con.execute(
+                f'INSERT INTO "{TARGET_TABLE}" ({col_list}) SELECT * FROM children_df'
+            )
             child_count += len(children_df)
             split_count += children_df["ParentId"].nunique()
 
-        processed += len(raw)
+        processed = unsplit_total + split_count
         elapsed = time.time() - t0
-        rate = processed / elapsed if elapsed > 0 else 0
+        rate = (unsplit_total + split_count) / elapsed if elapsed > 0 else 0
         print(
-            f"  {processed:>10,} / {total:,} scanned  |"
+            f"  {unsplit_total + split_count:>10,} / {total:,} scanned  |"
+            f"  {split_count:>6,} splits  |"
             f"  {child_count:>8,} children  |  {rate:>8,.0f} rows/sec"
         )
 
     cursor.close()
 
-    final_count = con.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
+    final_count = con.execute(f'SELECT COUNT(*) FROM "{TARGET_TABLE}"').fetchone()[0]
     con.close()
 
     elapsed = time.time() - t0
     print(f"\n{'=' * 65}")
     print(f"DONE  ({elapsed:.1f}s)")
-    print(f"  Original rows  : {total:,}")
-    print(f"  Rows split     : {split_count:,}")
-    print(f"  Children added : {child_count:,}")
-    print(f"  Total rows now : {final_count:,}")
+    print(f"  Source rows scanned  : {total:,}")
+    print(f"  Rows NOT split       : {unsplit_total:,}")
+    print(f"  Rows split           : {split_count:,}")
+    print(f"  Children added       : {child_count:,}")
+    print(f"  Expected in SPLIT    : {unsplit_total + child_count:,}")
+    print(f"  Actual   in SPLIT    : {final_count:,}")
     print(f"{'=' * 65}\n")
 
 

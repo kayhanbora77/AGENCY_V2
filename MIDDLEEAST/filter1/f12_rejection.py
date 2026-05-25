@@ -36,7 +36,7 @@ import pandas as pd
 # ============================================================================
 
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
-SOURCE_TABLE = "MIDDLEEAST_RAW2"  # input  table (read-only)
+SOURCE_TABLE = "MIDDLEEAST_SPLIT"  # input  table (read-only)
 TARGET_TABLE = "MIDDLEEAST_CLEANED"  # output table for clean / passing rows
 REJECTION_TABLE = "MIDDLEEAST_REJECTION"  # output table for rejected rows
 
