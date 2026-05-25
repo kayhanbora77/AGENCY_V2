@@ -11,9 +11,7 @@ import re
 # ==================================================
 # CONFIG
 # ==================================================
-DATABASE_DIR = Path(r"C:\DuckDB")
-DATABASE_NAME = "my_db.duckdb"
-DB_PATH = DATABASE_DIR / DATABASE_NAME
+DB_PATH = r"C:\DuckDB\my_db.duckdb"
 
 THREADS = 8
 MEMORY_LIMIT = "8GB"
@@ -32,7 +30,7 @@ SPECIAL_NON_EU_CARRIERS = {"BA", "TK", "PC", "JU", "FH", "VF", "VS"}
 
 MAX_LEGS = 4  # FlightNo1..FlightNo4
 
-DATABASE_DIR.mkdir(parents=True, exist_ok=True)
+Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
 TEMP_DIR_PATH.mkdir(parents=True, exist_ok=True)
 
 TARGET_COLUMNS = [

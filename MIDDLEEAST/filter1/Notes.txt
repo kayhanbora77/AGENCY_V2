@@ -1,0 +1,8 @@
+AFter f12_rejection.py:
+--------------------------------------------------------------------------------
+ALTER TABLE MIDDLEEAST_CLEANED
+ADD COLUMN AirlineCodes VARCHAR;
+
+UPDATE MIDDLEEAST_CLEANED
+SET AirlineCodes = LEFT(FlightNo1, 2);
+--------------------------------------------------------------------------------
