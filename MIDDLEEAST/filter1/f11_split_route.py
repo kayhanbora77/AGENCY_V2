@@ -1,15 +1,14 @@
 """
 Flight Row Splitter  —  optimized for 5M+ rows
 ================================================
-Reads MIDDLEEAST_RAW in chunks via fetchmany() (no OFFSET scan),
-processes splits in Python, bulk-inserts parent + children into MIDDLEEAST_SPLIT.
-
 Rules
 -----
-1. Airport1 == Airport3 OR Airport1 == Airport5 → always split  (NEW)
-2. Round-trip  : Airport1 == AirportLast         → split at every turnaround point
-3. One-way / connecting (ALL consecutive date gaps ≤ 1 day) → do NOT split
-4. One-way / with gap   (ANY consecutive date gap  > 1 day) → split at gaps
+1. count(FlightNo) > count(FlightDate)  → insert into MIDDLEEAST_REJECTION
+2. count(FlightNo) <= count(FlightDate) → trim to count(FlightNo) flights/dates,
+                                          keep other columns (DAIS, TRNN, etc.) unchanged
+3. count(Airport)  = count(FlightNo) + 1 (trim airports accordingly)
+4. Any consecutive date gap > 1 day     → split at that boundary
+   All consecutive date gaps <= 1 day   → do NOT split
 """
 
 import duckdb
@@ -26,6 +25,7 @@ from datetime import datetime
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
 SOURCE_TABLE = "MIDDLEEAST_RAW"
 TARGET_TABLE = "MIDDLEEAST_SPLIT"
+REJECT_TABLE = "MIDDLEEAST_REJECTION"
 
 MAX_FLIGHTS = 4
 MAX_DATES = 4
@@ -42,6 +42,25 @@ DATE_COLS = [f"FlightDate{i + 1}" for i in range(MAX_DATES)]
 AIRPORT_COLS = [f"Airport{i + 1}" for i in range(MAX_AIRPORTS)]
 
 DYNAMIC_COLS = FLIGHT_COLS + DATE_COLS + AIRPORT_COLS
+
+# Columns that are always carried through unchanged
+STATIC_COLS = [
+    "DAIS",
+    "TRNN",
+    "TDNR",
+    "TRNC",
+    "STAT",
+    "PNRR",
+    "Class",
+    "FareBasis",
+    "FirstSectorDate",
+    "LastSectordate",
+    "PaxName",
+    "AirlineName",
+    "AirlineCode",
+    "_SourceFile",
+    "_SourceSheet",
+]
 
 COL_IDX: dict = {}
 
@@ -84,143 +103,187 @@ def is_valid(val):
 
 
 # ============================================================================
-# ROW-LEVEL SPLIT LOGIC
+# RULE 1 & 2: count flights vs dates, then trim
 # ============================================================================
 
 
-def get_flights_airports(row_list):
-    flights = []
+def extract_and_validate(row_list):
+    """
+    Returns:
+        "reject"  — count(FlightNo) > count(FlightDate)   [Rule 1]
+        flights   — list of (FlightNo, FlightDate) tuples  [Rule 2, trimmed]
+        airports  — list of airport strings                 [Rule 3, trimmed]
+
+    Rule 2: take only the first count(FlightNo) dates
+    Rule 3: airports trimmed to count(FlightNo) + 1
+    """
+    # Count valid FlightNos and FlightDates
+    flight_nos = []
     for i in range(MAX_FLIGHTS):
-        fn = row_list[COL_IDX[f"FlightNo{i + 1}"]]
-        fd = row_list[COL_IDX[f"FlightDate{i + 1}"]]
-        if is_valid(fn) and is_valid(fd):
-            fn = fn if isinstance(fn, str) else str(fn)
-            fd = fd if isinstance(fd, str) else str(fd)
-            flights.append((fn.strip(), fd.strip()))
-
-    airports = []
-    for c in AIRPORT_COLS:
-        v = row_list[COL_IDX[c]]
+        v = row_list[COL_IDX[f"FlightNo{i + 1}"]]
         if is_valid(v):
-            airports.append(v.strip())
+            flight_nos.append(v.strip() if isinstance(v, str) else str(v))
 
-    return flights, airports
+    flight_dates = []
+    for i in range(MAX_DATES):
+        v = row_list[COL_IDX[f"FlightDate{i + 1}"]]
+        if is_valid(v):
+            flight_dates.append(v.strip() if isinstance(v, str) else str(v))
+
+    cnt_no = len(flight_nos)
+    cnt_date = len(flight_dates)
+
+    # Rule 1: more flight numbers than dates → reject
+    if cnt_no > cnt_date:
+        return "reject", None, None
+
+    # Rule 2: trim dates to match flight number count
+    # (if cnt_no <= cnt_date, we only keep the first cnt_no dates)
+    trimmed_dates = flight_dates[:cnt_no]
+    flights = list(zip(flight_nos, trimmed_dates))  # [(fn, fd), ...]
+
+    # Rule 3: airports trimmed to cnt_no + 1
+    all_airports = []
+    for i in range(MAX_AIRPORTS):
+        v = row_list[COL_IDX[f"Airport{i + 1}"]]
+        if is_valid(v):
+            all_airports.append(v.strip() if isinstance(v, str) else str(v))
+
+    max_airports = cnt_no + 1
+    airports = all_airports[:max_airports]
+
+    return flights, airports, cnt_no
 
 
-def find_all_split_points(flights, airports):
+# ============================================================================
+# RULE 4: split-point detection (date gap only)
+# ============================================================================
+
+
+def find_split_points(flights):
     """
-    Rules:
-    1. Round-trip (Airport1 == AirportLast):
-         a. Split at every interior airport that matches origin
-         b. No interior match → out-and-back with stopover:
-            split at midpoint (covers Airport1==Airport3 and Airport1==Airport5 cases)
-    2. Date gap > 1 day → split at that flight boundary
+    Rule 4: split wherever consecutive FlightDate gap > 1 day.
+    Returns sorted list of split indices (position in flights list where
+    a new segment begins).
     """
-    n_f = len(flights)
-    n_a = len(airports)
-
-    if n_f < 2:
-        return []
-
-    split_points = set()
-
-    # ── Rule 1: round-trip (Airport1 == AirportLast) ─────────────────────────
-    if n_a >= 3 and airports[-1] == airports[0]:
-        origin = airports[0]
-
-        interior_matches = [j for j in range(1, n_a - 1) if airports[j] == origin]
-        for j in interior_matches:
-            split_points.add(j)
-
-        # No interior airport matches → out-and-back with stopover
-        # e.g. ELQ→RUH→GIZ→RUH→ELQ  mid=2 → ELQ→RUH→GIZ | GIZ→RUH→ELQ
-        # e.g. MED→JED→TUU→RUH→MED  mid=2 → MED→JED→TUU | TUU→RUH→MED
-        # e.g. AAA→BBB→AAA           mid=1 → AAA→BBB | BBB→AAA
-        if not interior_matches:
-            mid = n_a // 2
-            if mid < n_f:
-                split_points.add(mid)
-
-    # ── Rule 2: date gap > 1 day ─────────────────────────────────────────────
-    for i in range(n_f - 1):
+    split_points = []
+    for i in range(len(flights) - 1):
         gap = day_gap(flights[i][1], flights[i + 1][1])
         if gap is not None and gap > 1:
-            split_points.add(i + 1)
+            split_points.append(i + 1)
+    return split_points
 
-    return sorted(split_points)
+
+# ============================================================================
+# BUILD CHILD ROW
+# ============================================================================
 
 
-def build_child_list(parent_list, all_cols, flights_slice, airports_slice, parent_id):
+def build_child_row(parent_list, flights_slice, airports_slice, parent_id):
+    """Clone parent, clear dynamic cols, fill in segment data."""
     child = list(parent_list)
 
+    # Clear all dynamic columns first
     for c in DYNAMIC_COLS:
         child[COL_IDX[c]] = None
 
+    # Fill flights
     for i, (fn, fd) in enumerate(flights_slice):
         child[COL_IDX[f"FlightNo{i + 1}"]] = fn
         child[COL_IDX[f"FlightDate{i + 1}"]] = fd
 
+    # Fill airports
     for i, ap in enumerate(airports_slice):
         child[COL_IDX[f"Airport{i + 1}"]] = ap
 
+    # New identity
     child[COL_IDX["id"]] = str(uuid.uuid4())
     child[COL_IDX["ParentId"]] = str(parent_id)
 
     return child
 
 
+# ============================================================================
+# BATCH PROCESSOR
+# ============================================================================
+
+
 def process_batch(rows_df, all_cols):
     """
-    Option C: SPLIT is fully self-contained.
-    - Rows with NO split → copied as-is into SPLIT
-    - Rows WITH a split  → only their children go into SPLIT (parent is NOT copied)
+    For each row:
+      - Reject  → rejection_rows   (Rule 1)
+      - No split → write trimmed row to unsplit_rows  (Rules 2+3, no gap)
+      - Split   → write children to child_rows        (Rules 2+3+4)
 
     Returns:
-        unsplit_df  — rows that need no splitting (pass-through)
-        children_df — child segment rows (ParentId set)
+        unsplit_df    — pass-through rows (trimmed per rules 2 & 3)
+        children_df   — split child rows
+        rejection_df  — rows violating rule 1
     """
     unsplit_rows = []
     child_rows = []
+    rejection_rows = []
 
     records = rows_df.values.tolist()
 
     for row_list in records:
-        flights, airports = get_flights_airports(row_list)
-        split_points = find_all_split_points(flights, airports)
+        result, airports, cnt_no = extract_and_validate(row_list)
 
-        if not split_points:
-            # No split → row goes to SPLIT as-is
-            unsplit_rows.append(list(row_list))
+        # ── Rule 1: reject ────────────────────────────────────────────────
+        if result == "reject":
+            rejection_rows.append(list(row_list))
             continue
 
+        flights = result  # list of (fn, fd)
+
+        # ── Apply trim back onto row (Rules 2 & 3) ────────────────────────
+        # Clear all dynamic cols, then re-populate with trimmed data
+        trimmed_row = list(row_list)
+        for c in DYNAMIC_COLS:
+            trimmed_row[COL_IDX[c]] = None
+        for i, (fn, fd) in enumerate(flights):
+            trimmed_row[COL_IDX[f"FlightNo{i + 1}"]] = fn
+            trimmed_row[COL_IDX[f"FlightDate{i + 1}"]] = fd
+        for i, ap in enumerate(airports):
+            trimmed_row[COL_IDX[f"Airport{i + 1}"]] = ap
+
+        # ── Rule 4: check for date gaps ───────────────────────────────────
+        split_points = find_split_points(flights)
+
+        if not split_points:
+            # No gap → write trimmed row as-is
+            unsplit_rows.append(trimmed_row)
+            continue
+
+        # Has gap → produce children
         parent_id = row_list[COL_IDX["id"]]
         boundaries = [0] + split_points + [len(flights)]
 
         for k in range(len(boundaries) - 1):
             f_start = boundaries[k]
             f_end = boundaries[k + 1]
-            a_start = boundaries[k]
-            a_end = (
-                (boundaries[k + 1] + 1) if k < len(boundaries) - 2 else len(airports)
-            )
+            # Airport slice: share the endpoint airport between segments
+            a_start = f_start
+            a_end = f_end + 1  # +1 to include the arrival airport
 
-            seg_flights = flights[f_start:f_end]
-            seg_airports = airports[a_start:a_end]
+            seg_flights = flights[a_start:f_end]
+            seg_airports = airports[a_start : min(a_end, len(airports))]
 
             if not seg_flights:
                 continue
 
             child_rows.append(
-                build_child_list(
-                    row_list, all_cols, seg_flights, seg_airports, parent_id
-                )
+                build_child_row(trimmed_row, seg_flights, seg_airports, parent_id)
             )
 
     empty = pd.DataFrame(columns=all_cols)
     unsplit_df = pd.DataFrame(unsplit_rows, columns=all_cols) if unsplit_rows else empty
     children_df = pd.DataFrame(child_rows, columns=all_cols) if child_rows else empty
+    rejection_df = (
+        pd.DataFrame(rejection_rows, columns=all_cols) if rejection_rows else empty
+    )
 
-    return unsplit_df, children_df
+    return unsplit_df, children_df, rejection_df
 
 
 # ============================================================================
@@ -244,12 +307,21 @@ def ensure_parent_id_column(con, table):
 
 
 def ensure_target_table(con, source_table, target_table):
-    """Drop if exists, then recreate with same schema as source."""
+    """Drop and recreate target table with same schema as source."""
     con.execute(f'DROP TABLE IF EXISTS "{target_table}"')
     con.execute(
         f'CREATE TABLE "{target_table}" AS SELECT * FROM "{source_table}" WHERE 1=0'
     )
-    print(f"  Recreated target table '{target_table}'.")
+    print(f"  Recreated table '{target_table}'.")
+
+
+def ensure_rejection_table(con, source_table, reject_table):
+    """Drop and recreate rejection table with same schema as source."""
+    con.execute(f'DROP TABLE IF EXISTS "{reject_table}"')
+    con.execute(
+        f'CREATE TABLE "{reject_table}" AS SELECT * FROM "{source_table}" WHERE 1=0'
+    )
+    print(f"  Recreated table '{reject_table}'.")
 
 
 # ============================================================================
@@ -259,7 +331,6 @@ def ensure_target_table(con, source_table, target_table):
 
 def process_table(db_path=DB_PATH, table=SOURCE_TABLE, batch_size=BATCH_SIZE):
     con = duckdb.connect(db_path)
-
     con.execute(f"PRAGMA threads={os.cpu_count()}")
     try:
         con.execute("SET memory_limit='16GB'")
@@ -267,7 +338,8 @@ def process_table(db_path=DB_PATH, table=SOURCE_TABLE, batch_size=BATCH_SIZE):
         pass
 
     ensure_parent_id_column(con, table)
-    ensure_target_table(con, table, TARGET_TABLE)  # NEW: auto-create target if missing
+    ensure_target_table(con, table, TARGET_TABLE)
+    ensure_rejection_table(con, table, REJECT_TABLE)
 
     all_cols = col_names(con, table)
 
@@ -280,6 +352,7 @@ def process_table(db_path=DB_PATH, table=SOURCE_TABLE, batch_size=BATCH_SIZE):
     unsplit_total = 0
     split_count = 0
     child_count = 0
+    reject_count = 0
     t0 = time.time()
 
     cursor = con.cursor()
@@ -291,7 +364,7 @@ def process_table(db_path=DB_PATH, table=SOURCE_TABLE, batch_size=BATCH_SIZE):
             break
 
         batch_df = pd.DataFrame(raw, columns=all_cols)
-        unsplit_df, children_df = process_batch(batch_df, all_cols)
+        unsplit_df, children_df, rejection_df = process_batch(batch_df, all_cols)
 
         if not unsplit_df.empty:
             con.execute(
@@ -306,30 +379,40 @@ def process_table(db_path=DB_PATH, table=SOURCE_TABLE, batch_size=BATCH_SIZE):
             child_count += len(children_df)
             split_count += children_df["ParentId"].nunique()
 
-        processed = unsplit_total + split_count
+        if not rejection_df.empty:
+            con.execute(
+                f'INSERT INTO "{REJECT_TABLE}" ({col_list}) SELECT * FROM rejection_df'
+            )
+            reject_count += len(rejection_df)
+
         elapsed = time.time() - t0
-        rate = (unsplit_total + split_count) / elapsed if elapsed > 0 else 0
+        scanned = unsplit_total + split_count + reject_count
+        rate = scanned / elapsed if elapsed > 0 else 0
         print(
-            f"  {unsplit_total + split_count:>10,} / {total:,} scanned  |"
+            f"  {scanned:>10,} / {total:,} scanned  |"
             f"  {split_count:>6,} splits  |"
-            f"  {child_count:>8,} children  |  {rate:>8,.0f} rows/sec"
+            f"  {child_count:>8,} children  |"
+            f"  {reject_count:>6,} rejected  |  {rate:>8,.0f} rows/sec"
         )
 
     cursor.close()
 
-    final_count = con.execute(f'SELECT COUNT(*) FROM "{TARGET_TABLE}"').fetchone()[0]
+    final_split = con.execute(f'SELECT COUNT(*) FROM "{TARGET_TABLE}"').fetchone()[0]
+    final_reject = con.execute(f'SELECT COUNT(*) FROM "{REJECT_TABLE}"').fetchone()[0]
     con.close()
 
     elapsed = time.time() - t0
-    print(f"\n{'=' * 65}")
+    print(f"\n{'=' * 70}")
     print(f"DONE  ({elapsed:.1f}s)")
     print(f"  Source rows scanned  : {total:,}")
     print(f"  Rows NOT split       : {unsplit_total:,}")
     print(f"  Rows split           : {split_count:,}")
     print(f"  Children added       : {child_count:,}")
+    print(f"  Rows rejected        : {reject_count:,}")
     print(f"  Expected in SPLIT    : {unsplit_total + child_count:,}")
-    print(f"  Actual   in SPLIT    : {final_count:,}")
-    print(f"{'=' * 65}\n")
+    print(f"  Actual   in SPLIT    : {final_split:,}")
+    print(f"  Actual   in REJECT   : {final_reject:,}")
+    print(f"{'=' * 70}\n")
 
 
 if __name__ == "__main__":

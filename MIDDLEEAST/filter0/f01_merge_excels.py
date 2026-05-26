@@ -27,8 +27,8 @@ import pandas as pd
 
 # ── CONFIGURATION ────────────────────────────────────────────────────────────
 SOURCE_FOLDER = r"C:\Users\cagri\Desktop\Agency\MiddleEast\Filter-0"
-OUTPUT_FILE   = r"C:\Users\cagri\Desktop\Agency\MiddleEast\merged_output.csv"
-ADD_SOURCE_COLS = True    # True: add _SourceFile and _SourceSheet columns
+OUTPUT_FILE = r"C:\Users\cagri\Desktop\Agency\MiddleEast\Filter-0\merged_MiddleEast.csv"
+ADD_SOURCE_COLS = True  # True: add _SourceFile and _SourceSheet columns
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -87,8 +87,10 @@ def merge(input_files, output_path, add_source_cols=True):
     merged.to_csv(output_path, index=False, encoding="utf-8-sig")
 
     size_mb = os.path.getsize(output_path) / (1024 * 1024)
-    print(f"\nDone: {total_rows:,} rows from {len(input_files)} file(s), "
-          f"{total_sheets_read} source sheet(s)")
+    print(
+        f"\nDone: {total_rows:,} rows from {len(input_files)} file(s), "
+        f"{total_sheets_read} source sheet(s)"
+    )
     print(f"File size : {size_mb:.1f} MB")
     print(f"Output    : {os.path.abspath(output_path)}")
 
@@ -103,17 +105,26 @@ def collect_files(folder):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Merge multiple Excel/CSV files into one CSV.")
+    parser = argparse.ArgumentParser(
+        description="Merge multiple Excel/CSV files into one CSV."
+    )
     parser.add_argument("files", nargs="*", help="Specific files to merge")
-    parser.add_argument("--folder", default=None, help="Folder to scan (overrides SOURCE_FOLDER)")
-    parser.add_argument("--output", default=None, help="Output CSV path (overrides OUTPUT_FILE)")
-    parser.add_argument("--no-source-cols", action="store_true",
-                        help="Do not add _SourceFile / _SourceSheet columns")
+    parser.add_argument(
+        "--folder", default=None, help="Folder to scan (overrides SOURCE_FOLDER)"
+    )
+    parser.add_argument(
+        "--output", default=None, help="Output CSV path (overrides OUTPUT_FILE)"
+    )
+    parser.add_argument(
+        "--no-source-cols",
+        action="store_true",
+        help="Do not add _SourceFile / _SourceSheet columns",
+    )
     args = parser.parse_args()
 
-    folder      = args.folder or SOURCE_FOLDER
+    folder = args.folder or SOURCE_FOLDER
     output_path = args.output or OUTPUT_FILE
-    src_cols    = (not args.no_source_cols) and ADD_SOURCE_COLS
+    src_cols = (not args.no_source_cols) and ADD_SOURCE_COLS
 
     if args.files:
         input_files = [f for f in args.files if os.path.isfile(f)]

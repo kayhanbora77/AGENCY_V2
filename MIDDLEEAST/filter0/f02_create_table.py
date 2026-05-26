@@ -69,8 +69,9 @@ BASE_COLS = [
 RE_FLIGHT_NO = re.compile(r"[A-Z]{2}-?\d+")
 RE_FULL_DATE = re.compile(r"^(\d{1,2})/(\d{1,2})/(\d{4})")  # MM/DD/YYYY or M/D/YYYY
 RE_ISO_DATE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})")  # YYYY-MM-DD...
-RE_SHORT_DATE = re.compile(r"^(\d{1,2})\s*([A-Z]{3})$")  # 12FEB or "12 FEB"
-RE_DATE_TOKEN = re.compile(r"\d{1,2}\s*[A-Z]{3}")  # tokens inside multi-date strings
+RE_SHORT_DATE = re.compile(r"^(\d{1,2})\s*([A-Za-z]{3})$")  # 12FEB or "12 FEB"
+RE_DATE_TOKEN = re.compile(r"\d{1,2}\s*[A-Za-z]{3}")
+RE_DMY_SHORT = re.compile(r"^(\d{1,2})-([A-Za-z]{3})-(\d{2})$")  # 27-Oct-25
 
 # ============================================================================
 # YEAR EXTRACTION  (THE KEY FIX)
@@ -111,24 +112,17 @@ def extract_year_from_datestr(s):
 # ============================================================================
 # DATE PARSING
 # ============================================================================
-
-
 def parse_flight_date(date_str, ref_year):
-    """
-    Parse a single flight date token into YYYY-MM-DD 00:00:00.
-    ref_year is the authoritative year taken from FirstSectordate.
-    """
     date_str = date_str.strip()
-
     if not date_str:
         return None
 
-    # Already ISO: 2026-02-09 00:00:00  →  keep as-is but override year
+    # Already ISO: 2026-02-09 00:00:00
     m = RE_ISO_DATE.match(date_str)
     if m:
         y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
         if ref_year:
-            y = ref_year  # always trust the booking year
+            y = ref_year
         return f"{y}-{mo:02d}-{d:02d} 00:00:00"
 
     # MM/DD/YYYY
@@ -139,17 +133,29 @@ def parse_flight_date(date_str, ref_year):
             y = ref_year
         return f"{y}-{mo:02d}-{d:02d} 00:00:00"
 
-    # DDMMM or "DD MMM"  (year is always missing here)
+    # ── NEW: DD-MMM-YY  e.g. "27-Oct-25", "2-Aug-25" ─────────────────────
+    m = RE_DMY_SHORT.match(date_str)
+    if m:
+        d = int(m.group(1))
+        mon = m.group(2).upper()  # normalise to uppercase for MONTH_MAP
+        mo = MONTH_MAP.get(mon, 1)
+        yy = int(m.group(3))
+        # 2-digit year → 4-digit: 00-49 → 2000s, 50-99 → 1900s
+        y = (2000 + yy) if yy < 50 else (1900 + yy)
+        if ref_year:
+            y = ref_year  # still trust booking year if available
+        return f"{y}-{mo:02d}-{d:02d} 00:00:00"
+
+    # DD MMM or DDMMM  e.g. "28NOV", "19 SEP"
     m = RE_SHORT_DATE.match(date_str)
     if m:
         d = int(m.group(1))
-        mon = m.group(2).upper()
+        mon = m.group(2).upper()  # .upper() added here too
         mo = MONTH_MAP.get(mon, 1)
         y = ref_year or 2025
         return f"{y}-{mo:02d}-{d:02d} 00:00:00"
 
-    # Couldn't parse — return raw so nothing is silently lost
-    return date_str
+    return date_str  # return raw if nothing matched
 
 
 def split_flight_dates(raw, ref_year):
@@ -225,14 +231,8 @@ def build_all_cols():
 
 def process_row(row, all_cols):
     get = row.get
-
-    first_sector = (get("FirstSectordate") or "").strip()
     dais = (get("DAIS") or "").strip()
-
-    # ── Year: prefer FirstSectordate, fall back to DAIS ──────────────────────
-    ref_year = extract_year_from_datestr(first_sector) or extract_year_from_datestr(
-        dais
-    )
+    ref_year = extract_year_from_datestr(dais)
 
     fn = split_flight_nos((get("FlightNo") or "").strip())
     fd = split_flight_dates((get("FlightDate") or "").strip(), ref_year)
