@@ -16,6 +16,8 @@ import uuid
 import os
 import time
 import pandas as pd
+import re
+import math
 from datetime import datetime
 
 # ============================================================================
@@ -40,9 +42,9 @@ BATCH_SIZE = 200_000
 FLIGHT_COLS = [f"FlightNo{i + 1}" for i in range(MAX_FLIGHTS)]
 DATE_COLS = [f"FlightDate{i + 1}" for i in range(MAX_DATES)]
 AIRPORT_COLS = [f"Airport{i + 1}" for i in range(MAX_AIRPORTS)]
-
 DYNAMIC_COLS = FLIGHT_COLS + DATE_COLS + AIRPORT_COLS
 
+_RE_FLTNO = re.compile(r"^[A-Z0-9]{2,3}\d+$")
 # Columns that are always carried through unchanged
 STATIC_COLS = [
     "DAIS",
@@ -64,9 +66,50 @@ STATIC_COLS = [
 
 COL_IDX: dict = {}
 
+
 # ============================================================================
 # HELPERS
 # ============================================================================
+def _isna(val) -> bool:
+    """True if val is None, NaN, or blank-after-strip."""
+    if val is None:
+        return True
+    if isinstance(val, float) and math.isnan(val):
+        return True
+    if isinstance(val, str) and val.strip() == "":
+        return True
+    return False
+
+
+def normalize_flight_numbers(row: dict) -> dict:
+    """
+    Rule 7 — strip leading zeros between prefix letters and digit suffix.
+    Mutates a copy of the row dict.
+    """
+    row = dict(row)
+    for i in range(1, MAX_FLIGHTS + 1):
+        fn = row.get(f"FlightNo{i}")
+        if not _isna(fn):
+            fn_str = str(fn).strip()
+            fn_upper = fn_str.upper()
+            if _RE_FLTNO.fullmatch(fn_upper):
+                row[f"FlightNo{i}"] = _normalize_flightno(fn_upper)
+    return row
+
+
+def _normalize_flightno(fn: str) -> str:
+    """
+    Remove leading zeros between the alphabetic prefix and the numeric suffix.
+    E.g.  SV0020 → SV20,  AF0459 → AF459,  EK001 → EK1
+    Assumes fn is already stripped and uppercased.
+    """
+    m = re.fullmatch(r"([A-Z0-9]{2,3}?)(\d+)", fn.upper().strip())
+    if not m:
+        return fn
+    prefix, digits = m.group(1), m.group(2)
+    # Strip leading zeros from the digit part, but keep at least '0' if all zeros
+    normalized_digits = digits.lstrip("0") or "0"
+    return prefix + normalized_digits
 
 
 def parse_dt(val):
@@ -227,6 +270,11 @@ def process_batch(rows_df, all_cols):
     records = rows_df.values.tolist()
 
     for row_list in records:
+        # ── Rule 7: normalize FlightNo values (strip leading zeros) ───────
+        row_dict = dict(zip(all_cols, row_list))
+        row_dict = normalize_flight_numbers(row_dict)
+        row_list = [row_dict[c] for c in all_cols]
+
         result, airports, cnt_no = extract_and_validate(row_list)
 
         # ── Rule 1: reject ────────────────────────────────────────────────
