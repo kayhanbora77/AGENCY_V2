@@ -6,8 +6,8 @@ from pathlib import Path
 # CONFIG
 # ==================================================
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
-CSV_PATH = r"C:\Users\cagri\Desktop\Agency\Riya_CANADA\filter-0\merged_Riya_Canada.csv"
-TABLE_NAME = "RIYA_CANADA_RAW"
+CSV_PATH = r"C:\Users\cagri\Desktop\Agency\Riya_USA\filter-0\merged_Riya_USA.csv"
+TABLE_NAME = "RIYA_USA_RAW"
 
 
 # ==================================================
