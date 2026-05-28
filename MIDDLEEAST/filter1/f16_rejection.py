@@ -36,7 +36,7 @@ import pandas as pd
 # ============================================================================
 
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
-SOURCE_TABLE = "MIDDLEEAST_SPLIT"  # input  table (read-only)
+SOURCE_TABLE = "MIDDLEEAST_SPLIT7"  # input  table (read-only)
 TARGET_TABLE = "MIDDLEEAST_CLEANED"  # output table for clean / passing rows
 REJECTION_TABLE = "MIDDLEEAST_REJECTION"  # output table for rejected rows
 
@@ -556,18 +556,18 @@ def _sanitize_col(col: str) -> str:
     return col.strip().replace('"', '""')  # escape any embedded quotes
 
 
-def create_rejection_table(con, source_cols: list[str], rejection_table: str):
-    con.execute(f'DROP TABLE IF EXISTS "{rejection_table}"')
-    if not source_cols:
-        raise ValueError("source_cols is empty — cannot create rejection table")
-    col_defs = ", ".join(f'"{_sanitize_col(c)}" VARCHAR' for c in source_cols)
-    con.execute(f"""
-        CREATE TABLE "{rejection_table}" (
-            {col_defs},
-            "RejectionReason" VARCHAR
-        )
-    """)
-    print(f"  Created {rejection_table}.")
+# def create_rejection_table(con, source_cols: list[str], rejection_table: str):
+#    con.execute(f'DROP TABLE IF EXISTS "{rejection_table}"')
+#    if not source_cols:
+#        raise ValueError("source_cols is empty — cannot create rejection table")
+#    col_defs = ", ".join(f'"{_sanitize_col(c)}" VARCHAR' for c in source_cols)
+#    con.execute(f"""
+#        CREATE TABLE "{rejection_table}" (
+#            {col_defs},
+#            "RejectionReason" VARCHAR
+#        )
+#    """)
+#    print(f"  Created {rejection_table}.")
 
 
 def create_target_table(con, source_cols: list[str], target_table: str):
@@ -628,7 +628,7 @@ def process_table(
         if c != c.strip() or any(ord(ch) < 32 for ch in c):
             print(f"  ⚠ Column {i} has bad chars: {c!r}")
     # Create both output tables fresh each run
-    create_rejection_table(con, src_cols, rejection_table)
+    # create_rejection_table(con, src_cols, rejection_table)
     create_target_table(con, src_cols, target_table)
 
     # Column lists for INSERT statements
