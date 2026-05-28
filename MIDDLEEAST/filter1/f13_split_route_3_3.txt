@@ -1,0 +1,23 @@
+WITH src AS (
+    SELECT *
+    FROM MIDDLEEAST_SPLIT2
+    WHERE 
+        (FlightNo1 IS NOT NULL AND FlightNo1 <> '')
+        AND (FlightDate1 IS NOT NULL AND FlightDate1 <> '')
+
+        AND (FlightNo2 IS NOT NULL AND FlightNo2 <> '')
+        AND (FlightDate2 IS NOT NULL AND FlightDate2 <> '')
+
+        AND (FlightNo3 IS NOT NULL AND FlightNo3 <> '')
+        AND (FlightDate3 IS NOT NULL AND FlightDate3 <> '')
+
+        AND (FlightNo4 IS NULL OR FlightNo4 = '')
+        AND (FlightDate4 IS NULL OR FlightDate4 = '')
+
+        AND Airport2 = Airport3
+)
+INSERT INTO middleeast_rejection
+SELECT 
+    src.*,
+    'Airport2=Airport3' AS rejection_reason
+FROM src;
