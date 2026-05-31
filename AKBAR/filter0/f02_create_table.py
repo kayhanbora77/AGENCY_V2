@@ -16,7 +16,7 @@ from pathlib import Path
 # CONFIG
 # ============================================================================
 
-CSV_FILE_PATH = r"C:\Users\cagri\Desktop\Agency\Akbar\filter0\merged_Akbar.csv"
+CSV_FILE_PATH = r"C:\Users\cagri\Desktop\Agency\Akbar\filter-0\merged_Akbar.csv"
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
 TABLE_NAME = "AKBAR_RAW_V2"
 CHUNK_SIZE = 1_000_000
