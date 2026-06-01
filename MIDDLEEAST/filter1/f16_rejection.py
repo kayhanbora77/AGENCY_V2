@@ -56,6 +56,7 @@ AIRLINE_ALPHA_COL = "AirlineCodes"  # set to None to skip airline validation
 # Columns that define a duplicate segment
 DUP_KEY_COLS = [
     "PNRR",
+    "TDNR",
     "PaxName",
     "FlightNo1",
     "FlightNo2",
