@@ -49,8 +49,6 @@ BASE_COLS = [
     "TRNC",
     "STAT",
     "PNRR",
-    "Class",
-    "FareBasis",
     "FirstSectordate",
     "LastSectordate",
     "PaxName",
