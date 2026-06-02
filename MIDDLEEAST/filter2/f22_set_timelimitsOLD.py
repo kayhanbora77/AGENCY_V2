@@ -15,6 +15,7 @@ MEMORY_LIMIT = "12GB"
 TEMP_DIR = Path(tempfile.gettempdir()) / "duckdb_temp"
 SOURCE_TABLE = "TA_STANDARD_MIDDLEEAST"
 
+
 # ────────────────────────────────────────────────
 # CONSTANTS
 # ────────────────────────────────────────────────
@@ -27,16 +28,6 @@ SPECIAL_NON_EU_TIME_LIMITS = {
     "VF": (2, 2),
     "VS": (6, 6),
 }
-
-# Pre-split into separate mappings for vectorized lookup
-SPECIAL_L1_MAP = {
-    code: limits[0] for code, limits in SPECIAL_NON_EU_TIME_LIMITS.items()
-}
-SPECIAL_L2_MAP = {
-    code: limits[1] for code, limits in SPECIAL_NON_EU_TIME_LIMITS.items()
-}
-
-JUNE_2026 = pd.Timestamp("2026-06-20")
 
 
 # ────────────────────────────────────────────────
@@ -59,21 +50,21 @@ def get_connection() -> duckdb.DuckDBPyConnection:
 # ────────────────────────────────────────────────
 # DATA LOADING
 # ────────────────────────────────────────────────
-def get_eueligible_data(con: duckdb.DuckDBPyConnection) -> Optional[pd.DataFrame]:
+def get_eu_eligible_data(con: duckdb.DuckDBPyConnection) -> Optional[pd.DataFrame]:
     log("Loading EU eligible data...")
 
-    # Optimized: Removed unused columns (depCountry, arrCountry, LegNo)
-    # Removed ORDER BY (not needed for aggregation)
-    # Keep DepartureDate as native TIMESTAMP (no strftime roundtrip)
     query = f"""
         SELECT            
             t.ConnectionID,
             t.AirlineCode,
-            t.DepartureDate,
-            COALESCE(depLimits.LimitL1, 0)::DOUBLE  AS depL1,
-            COALESCE(depLimits.LimitL2, 0)::DOUBLE  AS depL2,
-            COALESCE(arrLimits.LimitL1, 0)::DOUBLE  AS arrL1,
-            COALESCE(arrLimits.LimitL2, 0)::DOUBLE  AS arrL2
+            strftime('%Y-%m-%d', t.DepartureDate)     AS DepartureDate,
+            depAirport.NameCountry                    AS depCountry,
+            arrAirport.NameCountry                    AS arrCountry,
+            COALESCE(depLimits.LimitL1, 0)            AS depL1,
+            COALESCE(depLimits.LimitL2, 0)            AS depL2,
+            COALESCE(arrLimits.LimitL1, 0)            AS arrL1,
+            COALESCE(arrLimits.LimitL2, 0)            AS arrL2,
+            t.LegNo
         FROM {SOURCE_TABLE} t
         LEFT JOIN AIRPORTS depAirport
             ON t.FromAirport = depAirport.CodeIataAirport
@@ -84,6 +75,7 @@ def get_eueligible_data(con: duckdb.DuckDBPyConnection) -> Optional[pd.DataFrame
         LEFT JOIN TIME_LIMITS arrLimits
             ON arrAirport.NameCountry = arrLimits.Country
         WHERE t.EUEligible IS TRUE
+        ORDER BY t.ConnectionID NULLS LAST, t.LegNo
     """
 
     try:
@@ -109,14 +101,19 @@ def calculate_timelimits_vectorized(df: pd.DataFrame) -> pd.DataFrame:
 
     df = df.copy()
 
-    # Ensure numeric types (SQL cast handles most, this is safety net)
-    limit_cols = ["depL1", "arrL1", "depL2", "arrL2"]
-    df[limit_cols] = df[limit_cols].fillna(0.0)
+    # Numeric conversion
+    num_cols = ["depL1", "arrL1", "depL2", "arrL2"]
+    df[num_cols] = (
+        df[num_cols].apply(pd.to_numeric, errors="coerce").fillna(0).astype(float)
+    )
 
-    # Aggregate per ConnectionID (no redundant group_key needed)
+    df["group_key"] = df["ConnectionID"]
+
+    # Aggregate per group
     agg = (
-        df.groupby("ConnectionID", sort=False, dropna=False)
+        df.groupby("group_key", sort=False)
         .agg(
+            ConnectionID=("ConnectionID", "first"),
             AirlineCode=("AirlineCode", "first"),
             DepartureDate=("DepartureDate", "min"),
             depL1=("depL1", "max"),
@@ -124,27 +121,31 @@ def calculate_timelimits_vectorized(df: pd.DataFrame) -> pd.DataFrame:
             depL2=("depL2", "max"),
             arrL2=("arrL2", "max"),
         )
-        .reset_index()
+        .reset_index(drop=True)
     )
 
-    # Max limit across dep/arr airports (vectorized)
+    # Max limit across dep/arr airports
     agg["limitL1"] = agg[["depL1", "arrL1"]].max(axis=1)
     agg["limitL2"] = agg[["depL2", "arrL2"]].max(axis=1)
 
-    # Special non-EU carrier fallback (fully vectorized - no lambda)
+    # Special non-EU carrier fallback when both limits are zero
     needs_special = (agg["limitL1"] == 0) & (agg["limitL2"] == 0)
     if needs_special.any():
-        agg.loc[needs_special, "limitL1"] = (
-            agg.loc[needs_special, "AirlineCode"].map(SPECIAL_L1_MAP).fillna(0.0)
+        special_map = agg.loc[needs_special, "AirlineCode"].map(
+            SPECIAL_NON_EU_TIME_LIMITS
         )
-        agg.loc[needs_special, "limitL2"] = (
-            agg.loc[needs_special, "AirlineCode"].map(SPECIAL_L2_MAP).fillna(0.0)
+        agg.loc[needs_special, "limitL1"] = special_map.apply(
+            lambda x: float(x[0]) if isinstance(x, tuple) else 0.0
+        )
+        agg.loc[needs_special, "limitL2"] = special_map.apply(
+            lambda x: float(x[1]) if isinstance(x, tuple) else 0.0
         )
 
-    # Calculate year difference from June 2026
-    diff_years = (JUNE_2026 - agg["DepartureDate"]).dt.days / 365.25
+    # Time limit check against June 2026
+    june_target = pd.to_datetime("2026-06-20")
+    agg["DepartureDate"] = pd.to_datetime(agg["DepartureDate"])
+    diff_years = (june_target - agg["DepartureDate"]).dt.days / 365.25
 
-    # Time limit check
     agg["IsTimeLimitL1"] = agg["limitL1"] >= diff_years
     agg["IsTimeLimitL2"] = agg["limitL2"] >= diff_years
 
@@ -154,7 +155,7 @@ def calculate_timelimits_vectorized(df: pd.DataFrame) -> pd.DataFrame:
 # ────────────────────────────────────────────────
 # DATABASE UPDATE
 # ────────────────────────────────────────────────
-def set_time_limits(con: duckdb.DuckDBPyConnection, df_updates: pd.DataFrame) -> None:
+def set_time_limits(con, df_updates):
     if df_updates.empty:
         log("No updates to apply")
         return
@@ -191,14 +192,14 @@ def main():
     con = get_connection()
 
     try:
-        df = get_eueligible_data(con)
+        df = get_eu_eligible_data(con)
 
         if df is not None:
             df_updates = calculate_timelimits_vectorized(df)
             set_time_limits(con, df_updates)
 
             log("──────────── DONE ────────────")
-            log(f"Updated {len(df_updates):,} connection groups")
+            log(f"Updated {len(df_updates):,} rows")
             log(f"Processed {len(df):,} legs")
             log(f"Finished in {time.time() - start_time:.2f} seconds")
         else:

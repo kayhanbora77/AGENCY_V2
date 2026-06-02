@@ -55,6 +55,7 @@ TARGET_COLUMNS = [
     "Link_Id",
     "DelayInSecond",
     "Status",
+    "IsSingleFlight",
 ]
 
 
@@ -130,7 +131,7 @@ class ChunkProcessor:
         conn_id_map = {idx: str(uuid.uuid4()) for idx in all_row_idxs}
         all_legs["ConnectionID"] = all_legs["_row_idx"].map(conn_id_map)
         all_legs = all_legs.drop(columns=["_row_idx", "_leg_count"], errors="ignore")
-
+        all_legs["Id"] = [str(uuid.uuid4()) for _ in range(len(all_legs))]
         # Rename AirlineCodes to AirlineCode for target table
         if "AirlineCodes" in all_legs.columns:
             all_legs = all_legs.rename(columns={"AirlineCodes": "AirlineCode"})
@@ -146,6 +147,7 @@ class ChunkProcessor:
         all_legs["Link_Id"] = None
         all_legs["DelayInSecond"] = None
         all_legs["Status"] = None
+        all_legs["IsSingleFlight"] = None
 
         return all_legs[TARGET_COLUMNS].reset_index(drop=True)
 
@@ -208,14 +210,8 @@ class ChunkProcessor:
         leg["AirlineCodes"] = sub["AirlineCodes"].astype(str).str.strip().str.upper()
 
         leg["PaxName"] = sub["PaxName"].fillna("").astype(str).str.strip()
-        leg["ETicketNo"] = (
-            sub["TRNN"].fillna(sub["TDNR"]).fillna("").astype(str).str.strip()
-        )
-        leg["BookingRef"] = (
-            sub["PNRR"]
-            .fillna(sub["TRNC"])
-            .where(sub["PNRR"].notna() | sub["TRNC"].notna(), other=None)
-        )
+        leg["ETicketNo"] = sub["TDNR"].fillna("").astype(str).str.strip()
+        leg["BookingRef"] = sub["PNRR"].fillna("").astype(str).str.strip()
         leg["FileName"] = sub["_SourceFile"].fillna("").astype(str).str.strip()
 
         return leg.reset_index(drop=True)
@@ -282,7 +278,6 @@ class ChunkProcessor:
                 )
             )
         )
-
         # Map back to leg rows
         return df["_row_idx"].map(eligible).astype(bool)
 
@@ -337,7 +332,8 @@ class Create_TA_STANDARD_TABLE:
                 EUFlights_Id        VARCHAR,
                 Link_Id             VARCHAR,
                 DelayInSecond       INTEGER,
-                Status              VARCHAR
+                Status              VARCHAR,
+                IsSingleFlight      BOOLEAN
             )
         """)
         print(f"✓ Table '{TARGET_TABLE}' created fresh.")
