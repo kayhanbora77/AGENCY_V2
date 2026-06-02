@@ -1,12 +1,9 @@
 import duckdb
 import pandas as pd
-import numpy as np
-from datetime import datetime
 import uuid
-from typing import List, Dict, Any, Optional
+from typing import Optional
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import re
 
 # ==================================================
 # CONFIG
@@ -289,7 +286,7 @@ class ChunkProcessor:
 # ==================================================
 # IMPORTER
 # ==================================================
-class TableToTableImporter:
+class Create_TA_STANDARD_TABLE:
     def __init__(self):
         self.con = duckdb.connect(DB_PATH)
         self.con.execute(f"SET threads={THREADS}")
@@ -413,11 +410,11 @@ class TableToTableImporter:
 # MAIN
 # ==================================================
 def main():
-    importer = TableToTableImporter()
+    standard_table = Create_TA_STANDARD_TABLE()
     try:
-        importer.run()
+        standard_table.run()
     finally:
-        importer.con.close()
+        standard_table.con.close()
 
 
 if __name__ == "__main__":
