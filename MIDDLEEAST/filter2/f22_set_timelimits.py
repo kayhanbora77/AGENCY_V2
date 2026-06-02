@@ -13,6 +13,8 @@ DB_PATH = r"C:\DuckDB\my_db.duckdb"
 THREADS = 8
 MEMORY_LIMIT = "12GB"
 TEMP_DIR = Path(tempfile.gettempdir()) / "duckdb_temp"
+SOURCE_TABLE = "TA_STANDARD_MIDDLEEAST"
+
 
 # ────────────────────────────────────────────────
 # CONSTANTS
@@ -51,9 +53,8 @@ def get_connection() -> duckdb.DuckDBPyConnection:
 def get_eu_eligible_data(con: duckdb.DuckDBPyConnection) -> Optional[pd.DataFrame]:
     log("Loading EU eligible data...")
 
-    query = """
-        SELECT
-            t.rowid                                    AS RowID,
+    query = f"""
+        SELECT            
             t.ConnectionID,
             t.AirlineCode,
             strftime('%Y-%m-%d', t.DepartureDate)     AS DepartureDate,
@@ -64,7 +65,7 @@ def get_eu_eligible_data(con: duckdb.DuckDBPyConnection) -> Optional[pd.DataFram
             COALESCE(arrLimits.LimitL1, 0)            AS arrL1,
             COALESCE(arrLimits.LimitL2, 0)            AS arrL2,
             t.LegNo
-        FROM TA_STANDARD_MIDDLEEAST t
+        FROM {SOURCE_TABLE} t
         LEFT JOIN AIRPORTS depAirport
             ON t.FromAirport = depAirport.CodeIataAirport
         LEFT JOIN AIRPORTS arrAirport
@@ -96,9 +97,7 @@ def get_eu_eligible_data(con: duckdb.DuckDBPyConnection) -> Optional[pd.DataFram
 # ────────────────────────────────────────────────
 def calculate_timelimits_vectorized(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
-        return pd.DataFrame(
-            columns=["ConnectionID", "RowID", "IsTimeLimitL1", "IsTimeLimitL2"]
-        )
+        return pd.DataFrame(columns=["ConnectionID", "IsTimeLimitL1", "IsTimeLimitL2"])
 
     df = df.copy()
 
@@ -108,25 +107,13 @@ def calculate_timelimits_vectorized(df: pd.DataFrame) -> pd.DataFrame:
         df[num_cols].apply(pd.to_numeric, errors="coerce").fillna(0).astype(float)
     )
 
-    # Group key:
-    #   - Connected flights  → group by ConnectionID (shared across legs)
-    #   - Single flights     → each NULL row gets its own unique key via RowID
-    df["group_key"] = (
-        df["ConnectionID"]
-        .astype(str)
-        .where(
-            df["ConnectionID"].notna(),
-            other="__single__"
-            + df["RowID"].astype(str),  # unique per single-flight row
-        )
-    )
+    df["group_key"] = df["ConnectionID"]
 
     # Aggregate per group
     agg = (
-        df.groupby("group_key", sort=False)
+        df.groupby("group_key", sort=False, dropna=False)
         .agg(
-            ConnectionID=("ConnectionID", "first"),  # NULL preserved for singles
-            RowID=("RowID", "first"),  # used to update singles
+            ConnectionID=("ConnectionID", "first"),
             AirlineCode=("AirlineCode", "first"),
             DepartureDate=("DepartureDate", "min"),
             depL1=("depL1", "max"),
@@ -162,62 +149,37 @@ def calculate_timelimits_vectorized(df: pd.DataFrame) -> pd.DataFrame:
     agg["IsTimeLimitL1"] = agg["limitL1"] >= diff_years
     agg["IsTimeLimitL2"] = agg["limitL2"] >= diff_years
 
-    return agg[["ConnectionID", "RowID", "IsTimeLimitL1", "IsTimeLimitL2"]]
+    return agg[["ConnectionID", "IsTimeLimitL1", "IsTimeLimitL2"]]
 
 
 # ────────────────────────────────────────────────
 # DATABASE UPDATE
 # ────────────────────────────────────────────────
-def set_time_limits(con: duckdb.DuckDBPyConnection, df_updates: pd.DataFrame) -> None:
+def set_time_limits(con, df_updates):
     if df_updates.empty:
         log("No updates to apply")
         return
 
-    log(f"Updating {len(df_updates):,} rows...")
-
-    df_with_id = df_updates[df_updates["ConnectionID"].notna()].copy()
-    df_without_id = df_updates[df_updates["ConnectionID"].isna()].copy()
-
+    log(f"Updating {len(df_updates):,} connection groups...")
+    con.register("temp_updates", df_updates)
     try:
         con.execute("BEGIN")
-
-        # ── Connected flights: bulk UPDATE matched by ConnectionID ────────────
-        if not df_with_id.empty:
-            con.register("temp_updates", df_with_id)
-            con.execute("""
-                UPDATE TA_STANDARD_MIDDLEEAST t
-                   SET IsTimeLimitL1 = u.IsTimeLimitL1,
-                       IsTimeLimitL2 = u.IsTimeLimitL2
-                  FROM temp_updates u
-                 WHERE t.ConnectionID = u.ConnectionID
-                   AND t.EUEligible IS TRUE
-            """)
-            con.unregister("temp_updates")
-            log(f"  Connected flights updated : {len(df_with_id):,}")
-
-        # ── Single flights: bulk UPDATE matched by rowid ──────────────────────
-        # Each single-flight row has a unique RowID so we can target it exactly,
-        # avoiding the previous bug where all NULLs got overwritten identically.
-        if not df_without_id.empty:
-            con.register("temp_singles", df_without_id)
-            con.execute("""
-                UPDATE TA_STANDARD_MIDDLEEAST t
-                   SET IsTimeLimitL1 = u.IsTimeLimitL1,
-                       IsTimeLimitL2 = u.IsTimeLimitL2
-                  FROM temp_singles u
-                 WHERE t.rowid = u.RowID
-                   AND t.EUEligible IS TRUE
-            """)
-            con.unregister("temp_singles")
-            log(f"  Single flights updated    : {len(df_without_id):,}")
-
+        con.execute(f"""
+            UPDATE {SOURCE_TABLE} t
+               SET IsTimeLimitL1 = u.IsTimeLimitL1,
+                   IsTimeLimitL2 = u.IsTimeLimitL2
+              FROM temp_updates u
+             WHERE t.ConnectionID = u.ConnectionID
+               AND t.EUEligible IS TRUE
+        """)
         con.execute("COMMIT")
-        log("All updates committed successfully")
-
+        log("Committed successfully")
     except Exception:
         con.execute("ROLLBACK")
-        log("UPDATE failed — transaction rolled back")
+        log("UPDATE failed — rolled back")
         raise
+    finally:
+        con.unregister("temp_updates")
 
 
 # ────────────────────────────────────────────────

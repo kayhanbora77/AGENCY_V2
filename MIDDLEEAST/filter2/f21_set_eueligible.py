@@ -40,7 +40,7 @@ TARGET_COLUMNS = [
     "DepartureDate",
     "FileName",
     "BookingRef",
-    "AirlineCode",
+    "AirlineCode",  # Target uses singular 'AirlineCode'
     "FromAirport",
     "ToAirport",
     "LastLegAirport",
@@ -126,15 +126,14 @@ class ChunkProcessor:
         # EUEligible — vectorized
         all_legs["EUEligible"] = self._vectorized_eligibility(all_legs)
 
-        # ConnectionID: NULL for single-leg, shared UUID per journey for multi-leg
-        multi_mask = all_legs["_leg_count"] > 1
-        # Generate one UUID per unique _row_idx that has multi-leg
-        multi_row_idxs = all_legs.loc[multi_mask, "_row_idx"].unique()
-        conn_id_map = {idx: str(uuid.uuid4()) for idx in multi_row_idxs}
+        all_row_idxs = all_legs["_row_idx"].unique()
+        conn_id_map = {idx: str(uuid.uuid4()) for idx in all_row_idxs}
         all_legs["ConnectionID"] = all_legs["_row_idx"].map(conn_id_map)
+        all_legs = all_legs.drop(columns=["_row_idx", "_leg_count"], errors="ignore")
 
-        # Row-level UUIDs for Id
-        all_legs["Id"] = [str(uuid.uuid4()) for _ in range(len(all_legs))]
+        # Rename AirlineCodes to AirlineCode for target table
+        if "AirlineCodes" in all_legs.columns:
+            all_legs = all_legs.rename(columns={"AirlineCodes": "AirlineCode"})
 
         # Fixed defaults for enrichment columns
         all_legs["AgencyRefNumber"] = None
@@ -204,7 +203,10 @@ class ChunkProcessor:
         leg["DepartureDate"] = dates.values
         leg["FromAirport"] = sub[ap_from].astype(str).str.strip().str.upper()
         leg["ToAirport"] = sub[ap_to].astype(str).str.strip().str.upper()
-        leg["AirlineCode"] = sub["AirlineCodes"].astype(str).str.strip().str.upper()
+
+        # Keep source column name as AirlineCodes (will rename later)
+        leg["AirlineCodes"] = sub["AirlineCodes"].astype(str).str.strip().str.upper()
+
         leg["PaxName"] = sub["PaxName"].fillna("").astype(str).str.strip()
         leg["ETicketNo"] = (
             sub["TRNN"].fillna(sub["TDNR"]).fillna("").astype(str).str.strip()
@@ -228,11 +230,13 @@ class ChunkProcessor:
         """
         eu_dep = df["FromAirport"].isin(self.eu_airports)
         eu_arr = df["ToAirport"].isin(self.eu_airports)
-        eu_carrier = df["AirlineCode"].isin(self.eu_carriers)
-        special = df["AirlineCode"].isin(SPECIAL_NON_EU_CARRIERS)
+
+        # Use 'AirlineCodes' column (source column name)
+        eu_carrier = df["AirlineCodes"].isin(self.eu_carriers)
+        special = df["AirlineCodes"].isin(SPECIAL_NON_EU_CARRIERS)
 
         # Per-leg eligibility signals
-        df2 = df[["_row_idx", "FromAirport", "ToAirport", "AirlineCode"]].copy()
+        df2 = df[["_row_idx", "FromAirport", "ToAirport", "AirlineCodes"]].copy()
         df2["eu_dep"] = eu_dep.values
         df2["eu_arr"] = eu_arr.values
         df2["eu_carrier"] = eu_carrier.values
@@ -303,8 +307,13 @@ class Create_TA_STANDARD_TABLE:
     # Table Creation
     # ------------------------------------------------------------------
     def _create_table(self):
+        # Drop target table if it exists
+        self.con.execute(f"DROP TABLE IF EXISTS {TARGET_TABLE}")
+        print(f"✓ Dropped existing '{TARGET_TABLE}' if it existed")
+
+        # Create fresh target table
         self.con.execute(f"""
-            CREATE TABLE IF NOT EXISTS {TARGET_TABLE} (
+            CREATE TABLE {TARGET_TABLE} (
                 Id                  VARCHAR PRIMARY KEY,
                 ConnectionID        VARCHAR,
                 PaxName             VARCHAR,
@@ -331,7 +340,7 @@ class Create_TA_STANDARD_TABLE:
                 Status              VARCHAR
             )
         """)
-        print(f"✓ Table '{TARGET_TABLE}' ready.")
+        print(f"✓ Table '{TARGET_TABLE}' created fresh.")
 
     # ------------------------------------------------------------------
     # Main Import
