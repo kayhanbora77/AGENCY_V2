@@ -1,0 +1,18 @@
+UPDATE AKBAR_SPLIT2_V2
+SET 
+    FlightNo2 = NULL,
+    FlightDate2 = NULL
+WHERE 
+    FlightNo1 IS NOT NULL AND FlightNo1 <> ''
+    AND FlightDate1 IS NOT NULL AND FlightDate1 <> ''
+
+    AND FlightNo2 IS NOT NULL AND FlightNo2 <> ''
+    AND FlightDate2 IS NOT NULL AND FlightDate2 <> ''
+
+    AND (FlightNo3 IS NULL OR FlightNo3 = '')
+    AND (FlightDate3 IS NULL OR FlightDate3 = '')
+
+    AND (FlightNo4 IS NULL OR FlightNo4 = '')
+    AND (FlightDate4 IS NULL OR FlightDate4 = '')
+
+    AND FlightNo1 = FlightNo2;

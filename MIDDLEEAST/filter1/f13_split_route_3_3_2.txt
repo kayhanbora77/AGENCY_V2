@@ -21,3 +21,10 @@ SELECT
     src.*,
     'Airport2=Airport3' AS rejection_reason
 FROM src;
+
+DELETE FROM middleeast_spit2 s
+WHERE EXISTS (
+    SELECT 1
+    FROM middleeast_rejection r
+    WHERE r.ID = s.ID   -- replace with your matching column(s)
+);
