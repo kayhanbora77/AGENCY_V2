@@ -10,8 +10,8 @@ from datetime import datetime
 # ============================================================================
 
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
-SOURCE_TABLE = "AKBAR_SPLIT5_V2"
-TARGET_TABLE = "AKBAR_SPLIT6_V2"
+SOURCE_TABLE = "AKBAR_SPLIT4_V2"
+TARGET_TABLE = "AKBAR_SPLIT5_V2"
 
 MAX_FLIGHTS = 4
 MAX_DATES = 4
