@@ -227,8 +227,8 @@ def build_all_cols():
 
 def process_row(row, all_cols):
     get = row.get
-    dais = (get("DAIS") or "").strip()
-    ref_year = extract_year_from_datestr(dais)
+    ref_date = (get("FirstSectordate") or "").strip()
+    ref_year = extract_year_from_datestr(ref_date)
 
     fn = split_flight_nos((get("FlightNo") or "").strip())
     fd = split_flight_dates((get("FlightDate") or "").strip(), ref_year)

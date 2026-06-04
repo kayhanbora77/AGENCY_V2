@@ -1,0 +1,8 @@
+Before running f17_rejection.py:
+--------------------------------------------------------------------------------
+ALTER TABLE TABLE_NAME = "AKBAR_RAW_V2"
+ADD COLUMN AirlineCodes VARCHAR;
+
+UPDATE TABLE_NAME = "AKBAR_RAW_V2"
+SET AirlineCodes = LEFT(FlightNo1, 2);
+--------------------------------------------------------------------------------
