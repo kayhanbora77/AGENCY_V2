@@ -7,12 +7,12 @@
 INSERT INTO AKBAR_CLEANED_V2
 SELECT 
     gen_random_uuid() as id,
-    DAIS, TRNN, TDNR, TRNC, STAT, PNRR, Class, FareBasis,
+    DAIS, TRNN, TDNR, TRNC, STAT, PNRR,
     FirstSectordate, LastSectordate, PaxName, AirlineName, AirlineCode,
     _SourceFile, _SourceSheet,
     FlightNo1, FlightNo2, NULL, NULL,
     FlightDate1, FlightDate2, NULL, NULL,
-    Airport1, Airport2, Airport3, NULL, NULL,
+    Airport1, Airport2, Airport3, NULL, NULL,AirlineCodes,
     id as ParentId
 FROM AKBAR_CLEANED_V2
 WHERE Airport2 = Airport4 AND ParentId IS NULL;
@@ -21,12 +21,12 @@ WHERE Airport2 = Airport4 AND ParentId IS NULL;
 INSERT INTO AKBAR_CLEANED_V2
 SELECT 
     gen_random_uuid() as id,
-    DAIS, TRNN, TDNR, TRNC, STAT, PNRR, Class, FareBasis,
+    DAIS, TRNN, TDNR, TRNC, STAT, PNRR,
     FirstSectordate, LastSectordate, PaxName, AirlineName, AirlineCode,
     _SourceFile, _SourceSheet,
-    FlightNo3, NULL, NULL, NULL,
-    FlightDate3, NULL, NULL, NULL,
-    Airport3, Airport4, NULL, NULL, NULL,
+    FlightNo1, FlightNo2, NULL, NULL,
+    FlightDate1, FlightDate2, NULL, NULL,
+    Airport1, Airport2, Airport3, NULL, NULL,AirlineCodes,
     id as ParentId
 FROM AKBAR_CLEANED_V2
 WHERE Airport2 = Airport4 AND ParentId IS NULL
@@ -48,12 +48,12 @@ WHERE Airport2 = Airport4 AND ParentId IS NULL;
 INSERT INTO AKBAR_CLEANED_V2
 SELECT 
     gen_random_uuid() as id,
-    DAIS, TRNN, TDNR, TRNC, STAT, PNRR, Class, FareBasis,
+    DAIS, TRNN, TDNR, TRNC, STAT, PNRR,
     FirstSectordate, LastSectordate, PaxName, AirlineName, AirlineCode,
     _SourceFile, _SourceSheet,
     FlightNo1, FlightNo2, NULL, NULL,
     FlightDate1, FlightDate2, NULL, NULL,
-    Airport1, Airport2, Airport3, NULL, NULL,
+    Airport1, Airport2, Airport3, NULL, NULL,AirlineCodes,
     id as ParentId
 FROM AKBAR_CLEANED_V2
 WHERE Airport2 = Airport4 AND ParentId IS NOT NULL;
@@ -62,12 +62,12 @@ WHERE Airport2 = Airport4 AND ParentId IS NOT NULL;
 INSERT INTO AKBAR_CLEANED_V2
 SELECT 
     gen_random_uuid() as id,
-    DAIS, TRNN, TDNR, TRNC, STAT, PNRR, Class, FareBasis,
+    DAIS, TRNN, TDNR, TRNC, STAT, PNRR,
     FirstSectordate, LastSectordate, PaxName, AirlineName, AirlineCode,
     _SourceFile, _SourceSheet,
-    FlightNo3, NULL, NULL, NULL,
-    FlightDate3, NULL, NULL, NULL,
-    Airport3, Airport4, NULL, NULL, NULL,
+    FlightNo1, FlightNo2, NULL, NULL,
+    FlightDate1, FlightDate2, NULL, NULL,
+    Airport1, Airport2, Airport3, NULL, NULL,AirlineCodes,
     id as ParentId
 FROM AKBAR_CLEANED_V2
 WHERE (Airport2 = Airport4) AND (ParentId IS NOT NULL)
@@ -83,12 +83,12 @@ WHERE (Airport2 = Airport4) AND (ParentId IS NOT NULL)
 INSERT INTO AKBAR_CLEANED_V2
 SELECT 
     gen_random_uuid() as id,
-    DAIS, TRNN, TDNR, TRNC, STAT, PNRR, Class, FareBasis,
+    DAIS, TRNN, TDNR, TRNC, STAT, PNRR,
     FirstSectordate, LastSectordate, PaxName, AirlineName, AirlineCode,
     _SourceFile, _SourceSheet,
     FlightNo1, FlightNo2, NULL, NULL,
     FlightDate1, FlightDate2, NULL, NULL,
-    Airport1, Airport2, Airport3, NULL, NULL,
+    Airport1, Airport2, Airport3, NULL, NULL,AirlineCodes,
     id as ParentId
 FROM AKBAR_CLEANED_V2
 WHERE Airport2 = Airport5 AND ParentId IS NULL;
@@ -96,12 +96,12 @@ WHERE Airport2 = Airport5 AND ParentId IS NULL;
 INSERT INTO AKBAR_CLEANED_V2
 SELECT 
     gen_random_uuid() as id,
-    DAIS, TRNN, TDNR, TRNC, STAT, PNRR, Class, FareBasis,
+    DAIS, TRNN, TDNR, TRNC, STAT, PNRR,
     FirstSectordate, LastSectordate, PaxName, AirlineName, AirlineCode,
     _SourceFile, _SourceSheet,
-    FlightNo3, FlightNo4, NULL, NULL,
-    FlightDate3, FlightDate4, NULL, NULL,
-    Airport3, Airport4, Airport5, NULL, NULL,
+    FlightNo1, FlightNo2, NULL, NULL,
+    FlightDate1, FlightDate2, NULL, NULL,
+    Airport1, Airport2, Airport3, NULL, NULL,AirlineCodes,
     id as ParentId
 FROM AKBAR_CLEANED_V2
 WHERE Airport2 = Airport5 AND ParentId IS NULL;
