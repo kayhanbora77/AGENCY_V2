@@ -1,0 +1,110 @@
+-- ===================================================
+--1- SPLIT ROWS WHERE Airport2 = Airport4
+-- DuckDB compatible - no explicit transaction blocks
+-- ===================================================
+
+-- Insert first segment (2 flights)
+INSERT INTO AKBAR_CLEANED_V2
+SELECT 
+    gen_random_uuid() as id,
+    DAIS, TRNN, TDNR, TRNC, STAT, PNRR, Class, FareBasis,
+    FirstSectordate, LastSectordate, PaxName, AirlineName, AirlineCode,
+    _SourceFile, _SourceSheet,
+    FlightNo1, FlightNo2, NULL, NULL,
+    FlightDate1, FlightDate2, NULL, NULL,
+    Airport1, Airport2, Airport3, NULL, NULL,
+    id as ParentId
+FROM AKBAR_CLEANED_V2
+WHERE Airport2 = Airport4 AND ParentId IS NULL;
+
+-- Insert second segment (1 flight)
+INSERT INTO AKBAR_CLEANED_V2
+SELECT 
+    gen_random_uuid() as id,
+    DAIS, TRNN, TDNR, TRNC, STAT, PNRR, Class, FareBasis,
+    FirstSectordate, LastSectordate, PaxName, AirlineName, AirlineCode,
+    _SourceFile, _SourceSheet,
+    FlightNo3, NULL, NULL, NULL,
+    FlightDate3, NULL, NULL, NULL,
+    Airport3, Airport4, NULL, NULL, NULL,
+    id as ParentId
+FROM AKBAR_CLEANED_V2
+WHERE Airport2 = Airport4 AND ParentId IS NULL
+  AND FlightNo3 IS NOT NULL;
+
+-- Delete original rows
+DELETE FROM AKBAR_CLEANED_V2
+WHERE Airport2 = Airport4 AND ParentId IS NULL;
+
+------------------------------------------------------
+-----------------------------------------------------
+
+-- ===================================================
+-- 2-SPLIT ROWS WHERE Airport2 = Airport4
+-- DuckDB compatible - no explicit transaction blocks
+-- ===================================================
+
+-- Insert first segment (2 flights)
+INSERT INTO AKBAR_CLEANED_V2
+SELECT 
+    gen_random_uuid() as id,
+    DAIS, TRNN, TDNR, TRNC, STAT, PNRR, Class, FareBasis,
+    FirstSectordate, LastSectordate, PaxName, AirlineName, AirlineCode,
+    _SourceFile, _SourceSheet,
+    FlightNo1, FlightNo2, NULL, NULL,
+    FlightDate1, FlightDate2, NULL, NULL,
+    Airport1, Airport2, Airport3, NULL, NULL,
+    id as ParentId
+FROM AKBAR_CLEANED_V2
+WHERE Airport2 = Airport4 AND ParentId IS NOT NULL;
+
+-- Insert second segment (1 flight)
+INSERT INTO AKBAR_CLEANED_V2
+SELECT 
+    gen_random_uuid() as id,
+    DAIS, TRNN, TDNR, TRNC, STAT, PNRR, Class, FareBasis,
+    FirstSectordate, LastSectordate, PaxName, AirlineName, AirlineCode,
+    _SourceFile, _SourceSheet,
+    FlightNo3, NULL, NULL, NULL,
+    FlightDate3, NULL, NULL, NULL,
+    Airport3, Airport4, NULL, NULL, NULL,
+    id as ParentId
+FROM AKBAR_CLEANED_V2
+WHERE (Airport2 = Airport4) AND (ParentId IS NOT NULL)
+  AND FlightNo3 IS NOT NULL;
+
+-- Delete original rows
+DELETE FROM AKBAR_CLEANED_V2
+WHERE (Airport2 = Airport4) AND (ParentId IS NOT NULL)
+
+----------------------------------------------------------------------
+----------------------------------------------------------------------
+-- 3- Split when journey returns to the same airport (Airport2 = Airport5)
+INSERT INTO AKBAR_CLEANED_V2
+SELECT 
+    gen_random_uuid() as id,
+    DAIS, TRNN, TDNR, TRNC, STAT, PNRR, Class, FareBasis,
+    FirstSectordate, LastSectordate, PaxName, AirlineName, AirlineCode,
+    _SourceFile, _SourceSheet,
+    FlightNo1, FlightNo2, NULL, NULL,
+    FlightDate1, FlightDate2, NULL, NULL,
+    Airport1, Airport2, Airport3, NULL, NULL,
+    id as ParentId
+FROM AKBAR_CLEANED_V2
+WHERE Airport2 = Airport5 AND ParentId IS NULL;
+
+INSERT INTO AKBAR_CLEANED_V2
+SELECT 
+    gen_random_uuid() as id,
+    DAIS, TRNN, TDNR, TRNC, STAT, PNRR, Class, FareBasis,
+    FirstSectordate, LastSectordate, PaxName, AirlineName, AirlineCode,
+    _SourceFile, _SourceSheet,
+    FlightNo3, FlightNo4, NULL, NULL,
+    FlightDate3, FlightDate4, NULL, NULL,
+    Airport3, Airport4, Airport5, NULL, NULL,
+    id as ParentId
+FROM AKBAR_CLEANED_V2
+WHERE Airport2 = Airport5 AND ParentId IS NULL;
+
+DELETE FROM AKBAR_CLEANED_V2
+WHERE Airport2 = Airport5 AND ParentId IS NULL;
