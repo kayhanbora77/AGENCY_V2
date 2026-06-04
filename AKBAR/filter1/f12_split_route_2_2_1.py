@@ -3,7 +3,6 @@ import uuid
 import os
 import time
 import pandas as pd
-from datetime import datetime
 
 # ============================================================================
 # CONFIG
@@ -32,44 +31,6 @@ DYNAMIC_COLS = FLIGHT_COLS + DATE_COLS + AIRPORT_COLS
 COL_IDX: dict = {}
 
 # ============================================================================
-# HELPERS
-# ============================================================================
-
-
-def parse_dt(val):
-    if val is None:
-        return None
-    if isinstance(val, datetime):
-        return val
-    s = str(val).strip()[:19]
-    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
-        try:
-            return datetime.strptime(s, fmt)
-        except ValueError:
-            pass
-    return None
-
-
-def day_gap(d1, d2):
-    a, b = parse_dt(d1), parse_dt(d2)
-    if a is None or b is None:
-        return None
-    return abs((b - a).days)
-
-
-def is_valid(val):
-    if val is None:
-        return False
-    if isinstance(val, float):
-        import math
-
-        return not math.isnan(val)
-    if isinstance(val, str):
-        return val.strip() != ""
-    return True
-
-
-# ============================================================================
 # ROW-LEVEL SPLIT LOGIC
 # ============================================================================
 
@@ -79,16 +40,19 @@ def get_flights_airports(row_list):
     for i in range(MAX_FLIGHTS):
         fn = row_list[COL_IDX[f"FlightNo{i + 1}"]]
         fd = row_list[COL_IDX[f"FlightDate{i + 1}"]]
-        if is_valid(fn) and is_valid(fd):
-            fn = fn if isinstance(fn, str) else str(fn)
-            fd = fd if isinstance(fd, str) else str(fd)
-            flights.append((fn.strip(), fd.strip()))
+        if (
+            fn is not None
+            and fd is not None
+            and str(fn).strip() != ""
+            and str(fd).strip() != ""
+        ):
+            flights.append((str(fn).strip(), str(fd).strip()))
 
     airports = []
     for c in AIRPORT_COLS:
         v = row_list[COL_IDX[c]]
-        if is_valid(v):
-            airports.append(v.strip())
+        if v is not None and str(v).strip() != "":
+            airports.append(str(v).strip())
 
     return flights, airports
 
@@ -100,9 +64,6 @@ def find_all_split_points(flights, airports):
         Split into:
           Segment 1: FlightNo1 | Airport1 → Airport2
           Segment 2: FlightNo2 | Airport2 → Airport1
-
-    Rule 2 — Date gap > 1 day between consecutive flights:
-        Split at that flight boundary.
     """
     n_f = len(flights)
     n_a = len(airports)
@@ -115,12 +76,6 @@ def find_all_split_points(flights, airports):
     # ── Rule 1: exactly 2 flights and Airport1 == Airport3 ───────────────────
     if n_f == 2 and n_a == 3 and airports[0] == airports[2]:
         split_points.add(1)
-
-    # ── Rule 2: date gap > 1 day ─────────────────────────────────────────────
-    for i in range(n_f - 1):
-        gap = day_gap(flights[i][1], flights[i + 1][1])
-        if gap is not None and gap > 1:
-            split_points.add(i + 1)
 
     return sorted(split_points)
 
