@@ -1,8 +1,3 @@
-"""
-Flight Row Rejection  —  AKBAR MODULE (Fixed)
-=================================================
-"""
-
 import duckdb
 import math
 import os
