@@ -1,0 +1,18 @@
+CREATE TABLE AGENCY_TEST_DATA AS
+SELECT * FROM read_csv('C:/Users/cagri/Desktop/Agency/Agency_Test_Data/filter-0/C2R Flights Data (JAS25OND25).csv',
+    header=true,
+    delim=',',
+    auto_detect=false,
+    columns={
+        'DepartureAirport': 'VARCHAR',
+        'ArrivalAirport': 'VARCHAR',
+        'Airline': 'VARCHAR',
+        'FlightNo': 'VARCHAR',
+        'FlightDate': 'DATE'
+    },
+    dateformat = '%m/%d/%Y',
+    nullstr=''
+);
+
+UPDATE AGENCY_TEST_DATA
+SET FlightNumber = Airline || FlightNo
