@@ -1,0 +1,73 @@
+insert into  AKBAR_REJECTION_V2
+select *, 'Airport1=Airport3=Airport5' as RejectionReason from AKBAR_CLEANED_V2
+where airport1=airport3 and airport1=airport5
+
+SELECT *
+FROM AKBAR_CLEANED_V2
+WHERE airport1 = airport3
+  AND airport1 = airport5;
+
+
+DELETE FROM AKBAR_CLEANED_V2
+WHERE airport1 = airport3
+  AND airport1 = airport5;
+
+--------------------------------------------------
+
+insert into  AKBAR_REJECTION_V2
+select *, 'Airport1=Airport4' as RejectionReason from AKBAR_CLEANED_V2
+WHERE airport1 = airport4;
+
+
+SELECT *
+FROM AKBAR_CLEANED_V2
+WHERE airport1 = airport4;  
+
+
+DELETE FROM AKBAR_CLEANED_V2
+WHERE airport1 = airport4;
+
+---------------------------------------------------------
+
+insert into  AKBAR_REJECTION_V2
+select *, 'Airport1=Airport5' as RejectionReason from AKBAR_CLEANED_V2
+WHERE airport1 = airport5;
+
+
+SELECT *
+FROM AKBAR_CLEANED_V2
+WHERE airport1 = airport5;  
+
+
+DELETE FROM AKBAR_CLEANED_V2
+WHERE airport1 = airport5;
+
+---------------------------------------------------------
+
+insert into  AKBAR_REJECTION_V2
+select *, 'Airport2=Airport3' as RejectionReason from AKBAR_CLEANED_V2
+WHERE airport2 = airport3;
+
+
+SELECT *
+FROM AKBAR_CLEANED_V2
+WHERE airport2 = airport3;  
+
+
+DELETE FROM AKBAR_CLEANED_V2
+WHERE airport2 = airport3;
+
+-----------------------------------------------
+
+insert into  AKBAR_REJECTION_V2
+select *, 'Airport1=Airport3' as RejectionReason from AKBAR_CLEANED_V2
+WHERE airport1 = airport3;
+
+
+SELECT *
+FROM AKBAR_CLEANED_V2
+WHERE airport1 = airport3;  
+
+
+DELETE FROM AKBAR_CLEANED_V2
+WHERE airport1 = airport3;
