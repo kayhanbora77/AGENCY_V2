@@ -1,5 +1,5 @@
 CREATE TABLE OBILET_RAW AS
-SELECT * FROM read_csv('C:/Users/cagri/Desktop/Agency/Obilet/filter-0/merged_Obilet.csv',
+SELECT * FROM read_csv('C:/Users/cagri/Desktop/Agency/Obilet/filter-0/Obilet_Sheet1.csv',
     header=true,
     delim=',',
     auto_detect=false,
