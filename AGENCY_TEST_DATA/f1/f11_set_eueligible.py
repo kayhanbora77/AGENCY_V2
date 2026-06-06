@@ -1,6 +1,5 @@
 import duckdb
 import pandas as pd
-import uuid
 import logging
 from pathlib import Path
 from dataclasses import dataclass
@@ -16,7 +15,7 @@ class Config:
     memory_limit: str = "8GB"
     temp_dir: str = r"C:\DuckDB\temp"
     source_table: str = "AGENCY_TEST_DATA"
-    target_table: str = "TA_STANDARD_TEST"
+    target_table: str = "TA_STANDARD_AGENCY_TEST"
 
 
 CONFIG = Config()
@@ -25,7 +24,6 @@ SPECIAL_NON_EU_CARRIERS = frozenset({"BA", "TK", "PC", "JU", "FH", "VF", "VS"})
 
 
 TARGET_COLUMNS = [
-    "ConnectionID",
     "PaxName",
     "AgencyRefNumber",
     "ETicketNo",
@@ -115,13 +113,15 @@ class SimpleProcessor:
             return pd.DataFrame(columns=self._target_cols)
 
         df = df.copy()
-
         # Clean columns
-        from_airport = df["DepartureAirport"].str.strip().str.upper()
-        to_airport = df["ArrivalAirport"].str.strip().str.upper()
-        flight_number = df["FlightNumber"].astype(str).str.strip().str.upper()
-        carrier = df["Airline"].astype(str).str.strip().str.upper()
-
+        from_airport = (
+            df["DepartureAirport"].fillna("").astype(str).str.strip().str.upper()
+        )
+        to_airport = df["ArrivalAirport"].fillna("").astype(str).str.strip().str.upper()
+        carrier = df["Airline"].fillna("").astype(str).str.strip().str.upper()
+        flight_number = (
+            df["FlightNumber"].fillna("").astype(str).str.strip().str.upper()
+        )
         # EU eligibility — single flight, no connection logic needed
         eu_dep = from_airport.isin(self.eu_airports)
         eu_arr = to_airport.isin(self.eu_airports)
@@ -130,13 +130,9 @@ class SimpleProcessor:
 
         eligible = eu_dep | eu_arr | eu_carrier | is_special
 
-        # Generate connection IDs
-        df["ConnectionID"] = [str(uuid.uuid4()) for _ in range(len(df))]
-
         # Build output
         result = pd.DataFrame(
             {
-                "ConnectionID": df["ConnectionID"].values,
                 "PaxName": None,
                 "AgencyRefNumber": None,
                 "ETicketNo": None,
@@ -196,7 +192,7 @@ class CreateTAStandardTable:
         self.write_con.execute(f"""
             CREATE TABLE {self.config.target_table} (
                 Id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
-                ConnectionID VARCHAR, PaxName VARCHAR, AgencyRefNumber VARCHAR, 
+                PaxName VARCHAR, AgencyRefNumber VARCHAR, 
                 ETicketNo VARCHAR, FlightNumber VARCHAR, DepartureDate TIMESTAMP, 
                 FileName VARCHAR, BookingRef VARCHAR, AirlineCode VARCHAR, 
                 FromAirport VARCHAR, ToAirport VARCHAR, LastLegAirport VARCHAR, 

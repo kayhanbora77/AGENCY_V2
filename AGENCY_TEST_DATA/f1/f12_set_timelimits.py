@@ -112,11 +112,10 @@ def calculate_timelimits_vectorized(df: pd.DataFrame) -> pd.DataFrame:
     # Ensure numeric types (SQL cast handles most, this is safety net)
     limit_cols = ["depL1", "arrL1", "depL2", "arrL2"]
     df[limit_cols] = df[limit_cols].fillna(0.0)
-    # Before the groupby:
-    df_sorted = df.sort_values("DepartureDate", ascending=True)
+
     # Aggregate per ConnectionID (no redundant group_key needed)
     agg = (
-        df_sorted.groupby("ConnectionID", sort=False, dropna=False)
+        df.groupby("ConnectionID", sort=False, dropna=False)
         .agg(
             AirlineCode=("AirlineCode", "first"),
             DepartureDate=("DepartureDate", "min"),
@@ -127,6 +126,7 @@ def calculate_timelimits_vectorized(df: pd.DataFrame) -> pd.DataFrame:
         )
         .reset_index()
     )
+
     # Max limit across dep/arr airports (vectorized)
     agg["limitL1"] = agg[["depL1", "arrL1"]].max(axis=1)
     agg["limitL2"] = agg[["depL2", "arrL2"]].max(axis=1)

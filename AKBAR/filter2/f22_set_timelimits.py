@@ -13,7 +13,7 @@ DB_PATH = r"C:\DuckDB\my_db.duckdb"
 THREADS = 8
 MEMORY_LIMIT = "12GB"
 TEMP_DIR = Path(tempfile.gettempdir()) / "duckdb_temp"
-SOURCE_TABLE = "TA_STANDARD_MIDDLEEAST"
+SOURCE_TABLE = "TA_STANDARD_AKBAR_V2"
 
 # ────────────────────────────────────────────────
 # CONSTANTS
@@ -127,6 +127,7 @@ def calculate_timelimits_vectorized(df: pd.DataFrame) -> pd.DataFrame:
         )
         .reset_index()
     )
+
     # Max limit across dep/arr airports (vectorized)
     agg["limitL1"] = agg[["depL1", "arrL1"]].max(axis=1)
     agg["limitL2"] = agg[["depL2", "arrL2"]].max(axis=1)
