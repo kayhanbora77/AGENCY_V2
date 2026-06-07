@@ -1,0 +1,37 @@
+COPY (
+    SELECT
+        Id,
+        ConnectionID,
+        PaxName,
+        AgencyRefNumber,
+        ETicketNo,
+        FlightNumber,
+        DepartureDate,
+        FileName,
+        BookingRef,
+        AirlineCode,
+        FromAirport,
+        ToAirport,
+        LastLegAirport,
+
+        CASE WHEN EUEligible THEN 1 ELSE 0 END AS EUEligible,
+        EUEligibleDuration,
+        ExtraNote,
+
+        CASE WHEN FlightFound THEN 1 ELSE 0 END AS FlightFound,
+        LegNo,
+
+        CASE WHEN IsTimeLimitL1 THEN 1 ELSE 0 END AS IsTimeLimitL1,
+        CASE WHEN IsTimeLimitL2 THEN 1 ELSE 0 END AS IsTimeLimitL2,
+
+        EUFlights_Id,
+        Link_Id,
+        DelayInSecond,
+        Status,
+
+        CASE WHEN IsSingleFlight THEN 1 ELSE 0 END AS IsSingleFlight
+
+    FROM TA_STANDARD_MIDDLEEAST
+)
+TO 'C:/Users/cagri/Desktop/Agency/MiddleEast/TA_STANDARD_MIDDLEEAST.csv'
+(HEADER, DELIMITER ',', NULL '');
