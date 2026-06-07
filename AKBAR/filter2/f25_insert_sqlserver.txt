@@ -1,0 +1,107 @@
+-- Step 1: Create staging table with all VARCHAR columns
+CREATE TABLE #staging (
+    Id					VARCHAR(36),
+    ConnectionID        VARCHAR(100),
+    PaxName             VARCHAR(500),
+    AgencyRefNumber     VARCHAR(100),
+    ETicketNo           VARCHAR(100),
+    FlightNumber        VARCHAR(50),
+    DepartureDate       VARCHAR(50),
+    FileName            VARCHAR(500),
+    BookingRef          VARCHAR(100),
+    AirlineCode         VARCHAR(10),
+    FromAirport         VARCHAR(10),
+    ToAirport           VARCHAR(10),
+    LastLegAirport      VARCHAR(10),
+    EUEligible           INT,
+    EUEligibleDuration  VARCHAR(50),
+    ExtraNote           VARCHAR(MAX),
+    FlightFound          INT,
+    LegNo               INT,
+    IsTimeLimitL1        INT,
+    IsTimeLimitL2        INT,
+    EUFlights_Id         VARCHAR(100),
+    Link_Id             VARCHAR(100),
+    DelayInSecond       VARCHAR(50),    -- keep as VARCHAR for now
+    Status              VARCHAR(50),
+    IsSingleFlight       INT
+);
+
+-- Step 2: Bulk insert into staging (no format errors possible now)
+BULK INSERT #staging
+FROM 'C:\Users\C2RFlightDataUser\Documents\kayhan\Agency\Akbar_V2\TA_STANDARD_AKBAR_V2\TA_STANDARD_AKBAR_V2.csv'
+WITH (
+    FIRSTROW = 2,
+    FIELDTERMINATOR = ',',
+    ROWTERMINATOR = '0x0a',
+    FIELDQUOTE = '"',
+    FORMAT = 'CSV'
+);
+
+-- Step 3: Create TA_STANDARD_AKBAR_V2 table
+CREATE TABLE dbo.TA_STANDARD_AKBAR_V2
+(
+    Id                  UNIQUEIDENTIFIER NOT NULL,
+    ConnectionID        VARCHAR(100) NULL,
+    PaxName             VARCHAR(500) NULL,
+    AgencyRefNumber     VARCHAR(100) NULL,
+    ETicketNo           VARCHAR(100) NULL,
+    FlightNumber        VARCHAR(50) NULL,
+    DepartureDate       DATE NULL,
+    FileName            VARCHAR(500) NULL,
+    BookingRef          VARCHAR(100) NULL,
+    AirlineCode         VARCHAR(10) NULL,
+    FromAirport         VARCHAR(10) NULL,
+    ToAirport           VARCHAR(10) NULL,
+    LastLegAirport      VARCHAR(10) NULL,
+
+    EUEligible          BIT NULL,
+    EUEligibleDuration  INT NULL,
+    ExtraNote           VARCHAR(MAX) NULL,
+
+    FlightFound         BIT NULL,
+    LegNo               INT NULL,
+
+    IsTimeLimitL1       BIT NULL,
+    IsTimeLimitL2       BIT NULL,
+
+    EUFlights_Id        BIGINT NULL,
+    Link_Id             VARCHAR(100) NULL,
+
+    DelayInSecond       INT NULL,
+    Status              VARCHAR(50) NULL,
+
+    IsSingleFlight      BIT NULL
+);
+
+-- Step 4: Insert into real table with conversion
+INSERT INTO dbo.TA_STANDARD_AKBAR_V2
+SELECT
+    TRY_CAST(Id AS UNIQUEIDENTIFIER),
+    ConnectionID,
+    PaxName,
+    AgencyRefNumber,
+    ETicketNo,
+    FlightNumber,
+    TRY_CAST(DepartureDate AS DATE) AS DepartureDate,
+    FileName,
+    BookingRef,
+    AirlineCode,
+    FromAirport,
+    ToAirport,
+    LastLegAirport,
+    CAST(EUEligible AS INT),
+    TRY_CAST(EUEligibleDuration AS INT),
+    ExtraNote,
+    CAST(FlightFound AS INT),
+    TRY_CAST(LegNo AS INT),
+    CAST(IsTimeLimitL1 AS INT),
+    CAST(IsTimeLimitL2 AS INT),
+    TRY_CAST(EUFlights_Id AS BIGINT),
+    Link_Id,
+    TRY_CAST(DelayInSecond AS INT) AS DelayInSecond,   -- TRY_CAST handles empty strings gracefully
+    Status,
+    CAST(IsSingleFlight AS INT)
+FROM #staging;
+
+DROP TABLE #staging;

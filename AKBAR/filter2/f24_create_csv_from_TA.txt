@@ -33,5 +33,5 @@ COPY (
 
     FROM TA_STANDARD_AKBAR_V2
 )
-TO 'C:/Users/cagri/Desktop/Agency/Akbar/TA_STANDARD_AKBAR_V2.csv'
-(HEADER, DELIMITER ',', NULL '');
+TO 'C:/Users/cagri/Desktop/Agency/Akbar_V2/TA_STANDARD_AKBAR_V2.csv'
+(HEADER, DELIMITER ',', NULL 'NULL');

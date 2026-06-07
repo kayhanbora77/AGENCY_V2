@@ -1,0 +1,43 @@
+CREATE TABLE dbo.TA_STANDARD_MIDDLEEAST (
+    Id VARCHAR(255) NOT NULL PRIMARY KEY,
+
+    ConnectionID VARCHAR(255),
+    PaxName VARCHAR(255),
+    AgencyRefNumber VARCHAR(255),
+    ETicketNo VARCHAR(255),
+    FlightNumber VARCHAR(255),
+    DepartureDate DATETIME,
+    FileName VARCHAR(255),
+    BookingRef VARCHAR(255),
+    AirlineCode VARCHAR(10),
+    FromAirport VARCHAR(10),
+    ToAirport VARCHAR(10),
+    LastLegAirport VARCHAR(10),
+
+    EUEligible BIT,
+    EUEligibleDuration INT,
+    ExtraNote VARCHAR(MAX),
+
+    FlightFound BIT,
+    LegNo INT,
+
+    IsTimeLimitL1 BIT,
+    IsTimeLimitL2 BIT,
+
+    EUFlights_Id VARCHAR(255),
+    Link_Id VARCHAR(255),
+    DelayInSecond INT,
+    Status VARCHAR(50),
+
+    IsSingleFlight BIT
+);
+------------------------------------------------------------------------------
+
+BULK INSERT dbo.TA_STANDARD_MIDDLEEAST
+FROM 'C:\Users\C2RFlightDataUser\Documents\kayhan\Gelen_Datalar\AGENCY\MiddleEast\TA_STANDARD_MIDDLEEAST\TA_STANDARD_MIDDLEEAST.csv'
+WITH (
+    FIRSTROW = 2,
+    FIELDTERMINATOR = ',',
+    ROWTERMINATOR = '0x0a', -- This represents \n, or use '0x0d0a' for \r\n
+    FIELDQUOTE = '"'
+);
