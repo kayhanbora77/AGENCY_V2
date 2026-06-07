@@ -1,0 +1,18 @@
+UPDATE TA_STANDARD_MIDDLEEAST
+SET IsSingleFlight = TRUE
+WHERE ConnectionId IN (
+    SELECT ConnectionId
+    FROM TA_STANDARD_MIDDLEEAST
+    GROUP BY ConnectionId
+    HAVING COUNT(*) = 1
+);
+
+
+UPDATE TA_STANDARD_MIDDLEEAST
+SET IsSingleFlight = FALSE
+WHERE ConnectionId IN (
+    SELECT ConnectionId
+    FROM TA_STANDARD_MIDDLEEAST
+    GROUP BY ConnectionId
+    HAVING COUNT(*) > 1
+);
