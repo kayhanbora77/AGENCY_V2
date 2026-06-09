@@ -55,8 +55,8 @@ COL_IDX: dict = {}
 def get_flights_airports(row_list):
     flights = []
     for i in range(MAX_FLIGHTS):
-        fn = row_list[COL_IDX[f"FlightNo{i + 1}"]]
-        fd = row_list[COL_IDX[f"FlightDate{i + 1}"]]
+        fn = row_list[COL_IDX[f"FlightNumber{i + 1}"]]
+        fd = row_list[COL_IDX[f"DepartureDateLocal{i + 1}"]]
         if (
             fn is not None
             and fd is not None
@@ -104,11 +104,11 @@ def build_child_list(parent_list, all_cols, flights_slice, airports_slice, paren
         child[COL_IDX[c]] = None
 
     for i, (fn, fd) in enumerate(flights_slice):
-        child[COL_IDX[f"FlightNo{i + 1}"]] = fn
-        child[COL_IDX[f"FlightDate{i + 1}"]] = fd
+        child[COL_IDX[f"FlightNumber{i + 1}"]] = fn
+        child[COL_IDX[f"DepartureDateLocal{i + 1}"]] = fd
 
     for i, ap in enumerate(airports_slice):
-        child[COL_IDX[f"Airport{i + 1}"]] = ap
+        child[COL_IDX[f"AirportIataCode{i + 1}"]] = ap
 
     child[COL_IDX["id"]] = str(uuid.uuid4())
     child[COL_IDX["ParentId"]] = str(parent_id)

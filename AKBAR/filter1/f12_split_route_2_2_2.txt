@@ -1,18 +1,24 @@
-UPDATE AKBAR_SPLIT2_V2
+UPDATE OBILET_SPLIT2
 SET 
-    FlightNo2 = NULL,
-    FlightDate2 = NULL
+    FlightNumber2 = NULL,
+    DepartureDateLocal2 = NULL
 WHERE 
-    FlightNo1 IS NOT NULL AND FlightNo1 <> ''
-    AND FlightDate1 IS NOT NULL AND FlightDate1 <> ''
+    FlightNumber1 IS NOT NULL AND FlightNumber1 <> ''
+    AND DepartureDateLocal1 IS NOT NULL
 
-    AND FlightNo2 IS NOT NULL AND FlightNo2 <> ''
-    AND FlightDate2 IS NOT NULL AND FlightDate2 <> ''
+    AND FlightNumber2 IS NOT NULL AND FlightNumber2 <> ''
+    AND DepartureDateLocal2 IS NOT NULL
 
-    AND (FlightNo3 IS NULL OR FlightNo3 = '')
-    AND (FlightDate3 IS NULL OR FlightDate3 = '')
+    AND (FlightNumber3 IS NULL OR FlightNumber3 = '')
+    AND DepartureDateLocal3 IS NULL
 
-    AND (FlightNo4 IS NULL OR FlightNo4 = '')
-    AND (FlightDate4 IS NULL OR FlightDate4 = '')
+    AND (FlightNumber4 IS NULL OR FlightNumber4 = '')
+    AND DepartureDateLocal4 IS NULL
 
-    AND FlightNo1 = FlightNo2;
+    AND (FlightNumber5 IS NULL OR FlightNumber5 = '')
+    AND DepartureDateLocal5 IS NULL
+
+    AND (FlightNumber6 IS NULL OR FlightNumber6 = '')
+    AND DepartureDateLocal6 IS NULL
+
+    AND FlightNumber1 = FlightNumber2;
