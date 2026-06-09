@@ -26,7 +26,9 @@ class Config:
 
 
 CONFIG = Config()
-SPECIAL_NON_EU_CARRIERS = frozenset({"BA", "TK", "PC", "JU", "FH", "VF", "VS"})
+SPECIAL_NON_EU_CARRIERS = frozenset({"BA", "TK", "PC", "JU", "FH", "VF", "VS", "XQ"})
+TR_CARRIERS = frozenset({"TK", "PC", "FH", "XQ", "VF"})
+UK_CARRIERS = frozenset({"BA", "VS"})
 
 TARGET_COLUMNS = [
     "ConnectionID",
@@ -73,13 +75,21 @@ Path(CONFIG.temp_dir).mkdir(parents=True, exist_ok=True)
 # REFERENCE DATA
 # ==================================================
 class ReferenceData:
-    __slots__ = ("eu_airports", "eu_carriers")
+    __slots__ = (
+        "eu_airports",
+        "eu_carriers",
+        "tr_airports",
+        "uk_airports",
+    )
 
     def __init__(self, con: duckdb.DuckDBPyConnection):
         self.eu_airports: frozenset = self._load_airports(con)
         self.eu_carriers: frozenset = self._load_carriers(con)
+        self.tr_airports: frozenset = self._load_tr_airports(con)
+        self.uk_airports: frozenset = self._load_uk_airports(con)
         logger.info(
-            f"Loaded {len(self.eu_airports):,} EU airports, {len(self.eu_carriers):,} EU carriers"
+            f"Loaded {len(self.eu_airports):,} EU airports, {len(self.eu_carriers):,} EU carriers",
+            f"Loaded {len(self.tr_airports):,} TR airports, {len(self.uk_airports):,} UK airports",
         )
 
     @staticmethod
@@ -100,16 +110,48 @@ class ReferenceData:
         """).fetchall()
         return frozenset(r[0].strip().upper() for r in rows if r and r[0])
 
+    @staticmethod
+    def _load_uk_airports(con) -> frozenset:
+        rows = con.execute("""
+            SELECT CodeIataAirport 
+            FROM AIRPORTS 
+            WHERE CodeIso2Country = 'GB'
+        """).fetchall()
+        return frozenset(r[0].strip().upper() for r in rows if r and r[0])
+
+    @staticmethod
+    def _load_tr_airports(con) -> frozenset:
+        rows = con.execute("""
+            SELECT CodeIataAirport 
+            FROM AIRPORTS 
+            WHERE CodeIso2Country = 'TR'
+        """).fetchall()
+        return frozenset(r[0].strip().upper() for r in rows if r and r[0])
+
 
 # ==================================================
 # VECTORIZED CHUNK PROCESSOR
 # ==================================================
 class ChunkProcessor:
-    __slots__ = ("eu_airports", "eu_carriers", "_target_cols")
+    __slots__ = (
+        "eu_airports",
+        "eu_carriers",
+        "tr_airports",
+        "uk_airports",
+        "_target_cols",
+    )
 
-    def __init__(self, eu_airports: frozenset, eu_carriers: frozenset):
+    def __init__(
+        self,
+        eu_airports: frozenset,
+        eu_carriers: frozenset,
+        tr_airports: frozenset,
+        uk_airports: frozenset,
+    ):
         self.eu_airports = eu_airports
         self.eu_carriers = eu_carriers
+        self.tr_airports = tr_airports
+        self.uk_airports = uk_airports
         self._target_cols = TARGET_COLUMNS
 
     def process(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -227,7 +269,33 @@ class ChunkProcessor:
             }
         )
 
+    def _vectorized_eligibility_special_airlines(self, df: pd.DataFrame) -> pd.Series:
+        is_special = df["AirlineCodes"].isin(SPECIAL_NON_EU_CARRIERS)
+        if is_special.any():
+            df_special = df[is_special].copy()
+
+            df_special["EUEligible"] = self._vectorized_eligibility(df_special)
+            return df_special["EUEligible"]
+
     def _vectorized_eligibility(self, df: pd.DataFrame) -> pd.Series:
+        is_tr_carrier = df["AirlineCodes"].isin(TR_CARRIERS)
+        if is_tr_carrier.any():
+            is_in_tr_airports = df["FromAirport"].isin(self.tr_airports) | (
+                df["ToAirport"].isin(self.tr_airports)
+            )
+            if is_in_tr_airports.any():
+                eligible = True
+                return df["_uid"].map(eligible).astype(bool)
+
+        is_uk_carrier = df["AirlineCodes"].isin(UK_CARRIERS)
+        if is_uk_carrier.any():
+            is_in_uk_airports = df["FromAirport"].isin(self.uk_airports) | (
+                df["ToAirport"].isin(self.uk_airports)
+            )
+            if is_in_uk_airports.any():
+                eligible = True
+                return df["_uid"].map(eligible).astype(bool)
+
         eu_dep = df["FromAirport"].isin(self.eu_airports)
         eu_arr = df["ToAirport"].isin(self.eu_airports)
         eu_carrier = df["AirlineCodes"].isin(self.eu_carriers)

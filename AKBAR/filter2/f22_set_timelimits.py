@@ -26,6 +26,7 @@ SPECIAL_NON_EU_TIME_LIMITS = {
     "FH": (2, 2),
     "VF": (2, 2),
     "VS": (6, 6),
+    "XQ": (2, 2),
 }
 
 # Pre-split into separate mappings for vectorized lookup
