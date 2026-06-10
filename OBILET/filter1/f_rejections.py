@@ -13,7 +13,7 @@ import pandas as pd
 # ============================================================================
 
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
-SOURCE_TABLE = "OBILET_SPLIT3"
+SOURCE_TABLE = "OBILET_SPLIT4"
 TARGET_TABLE = "OBILET_CLEANED"
 REJECTION_TABLE = "OBILET_REJECTION"
 
