@@ -29,6 +29,8 @@ CONFIG = Config()
 SPECIAL_NON_EU_CARRIERS = frozenset({"BA", "TK", "PC", "JU", "FH", "VF", "VS", "XQ"})
 TR_CARRIERS = frozenset({"TK", "PC", "FH", "XQ", "VF"})
 UK_CARRIERS = frozenset({"BA", "VS"})
+SRB_CARRIERS = frozenset({"JU"})
+SRB_AIRPORTS = frozenset({"BEG", "INI", "KVO"})
 
 TARGET_COLUMNS = [
     "ConnectionID",
@@ -88,8 +90,8 @@ class ReferenceData:
         self.tr_airports: frozenset = self._load_tr_airports(con)
         self.uk_airports: frozenset = self._load_uk_airports(con)
         logger.info(
-            f"Loaded {len(self.eu_airports):,} EU airports, {len(self.eu_carriers):,} EU carriers",
-            f"Loaded {len(self.tr_airports):,} TR airports, {len(self.uk_airports):,} UK airports",
+            f"Loaded {len(self.eu_airports):,} EU airports, {len(self.eu_carriers):,} EU carriers | "
+            f"Loaded {len(self.tr_airports):,} TR airports, {len(self.uk_airports):,} UK airports"
         )
 
     @staticmethod
@@ -230,6 +232,8 @@ class ChunkProcessor:
             & df[ap_from].notna()
             & df[ap_to].notna()
             & (clean_flight != "")
+            & (clean_flight != "NAN")
+            & (clean_flight != "NONE")
         )
 
         sub = df.loc[valid_mask].copy()
@@ -249,7 +253,7 @@ class ChunkProcessor:
             {
                 "_uid": sub["_uid"].values,
                 "LegNo": leg_num,
-                "FlightNumber": clean_flight.values,  # Reuse pre-cleaned series
+                "FlightNumber": clean_flight.values,
                 "DepartureDate": dates.values,
                 "FromAirport": sub[ap_from].astype(str).str.strip().str.upper().values,
                 "ToAirport": sub[ap_to].astype(str).str.strip().str.upper().values,
@@ -269,77 +273,83 @@ class ChunkProcessor:
             }
         )
 
-    def _vectorized_eligibility_special_airlines(self, df: pd.DataFrame) -> pd.Series:
-        is_special = df["AirlineCodes"].isin(SPECIAL_NON_EU_CARRIERS)
-        if is_special.any():
-            df_special = df[is_special].copy()
-
-            df_special["EUEligible"] = self._vectorized_eligibility(df_special)
-            return df_special["EUEligible"]
-
     def _vectorized_eligibility(self, df: pd.DataFrame) -> pd.Series:
-        is_tr_carrier = df["AirlineCodes"].isin(TR_CARRIERS)
-        if is_tr_carrier.any():
-            is_in_tr_airports = df["FromAirport"].isin(self.tr_airports) | (
-                df["ToAirport"].isin(self.tr_airports)
-            )
-            if is_in_tr_airports.any():
-                eligible = True
-                return df["_uid"].map(eligible).astype(bool)
+        """
+        Check every leg's airline carrier:
+        1. If carrier is UK and FromAirport or ToAirport is UK → ALL legs with same _uid are Eligible
+        2. If carrier is TR and FromAirport or ToAirport is TR → ALL legs with same _uid are Eligible
+        3. If carrier is SRB and FromAirport or ToAirport is SRB → ALL legs with same _uid are Eligible
+        4. Otherwise apply EU261 rules
+        """
+        if df.empty:
+            return pd.Series(dtype=bool)
 
+        # --- RULE 1: UK Carrier + UK Airport on ANY leg → entire journey eligible ---
         is_uk_carrier = df["AirlineCodes"].isin(UK_CARRIERS)
-        if is_uk_carrier.any():
-            is_in_uk_airports = df["FromAirport"].isin(self.uk_airports) | (
-                df["ToAirport"].isin(self.uk_airports)
-            )
-            if is_in_uk_airports.any():
-                eligible = True
-                return df["_uid"].map(eligible).astype(bool)
+        touches_uk = df["FromAirport"].isin(self.uk_airports) | df["ToAirport"].isin(
+            self.uk_airports
+        )
+        uk_eligible_legs = is_uk_carrier & touches_uk
+        uk_journey_eligible = uk_eligible_legs.groupby(df["_uid"], sort=False).any()
 
+        # --- RULE 2: TR Carrier + TR Airport on ANY leg → entire journey eligible ---
+        is_tr_carrier = df["AirlineCodes"].isin(TR_CARRIERS)
+        touches_tr = df["FromAirport"].isin(self.tr_airports) | df["ToAirport"].isin(
+            self.tr_airports
+        )
+        tr_eligible_legs = is_tr_carrier & touches_tr
+        tr_journey_eligible = tr_eligible_legs.groupby(df["_uid"], sort=False).any()
+
+        # --- RULE 3: SRB Carrier + SRB Airport on ANY leg → entire journey eligible ---
+        is_srb_carrier = df["AirlineCodes"].isin(SRB_CARRIERS)
+        touches_srb = df["FromAirport"].isin(SRB_AIRPORTS) | df["ToAirport"].isin(
+            SRB_AIRPORTS
+        )
+        srb_eligible_legs = is_srb_carrier & touches_srb
+        srb_journey_eligible = srb_eligible_legs.groupby(df["_uid"], sort=False).any()
+
+        # EU261 logic
         eu_dep = df["FromAirport"].isin(self.eu_airports)
         eu_arr = df["ToAirport"].isin(self.eu_airports)
         eu_carrier = df["AirlineCodes"].isin(self.eu_carriers)
         is_special = df["AirlineCodes"].isin(SPECIAL_NON_EU_CARRIERS)
+
+        # Inbound: non-EU departure, EU arrival, with EU or special carrier
         inbound_ok = (~eu_dep) & eu_arr & (eu_carrier | is_special)
 
-        # Direct dict initialization avoids separate column assignments
-        agg_df = pd.DataFrame(
+        # Journey-level aggregation for EU261
+        journey_df = pd.DataFrame(
             {
                 "_uid": df["_uid"],
                 "eu_dep": eu_dep,
                 "eu_arr": eu_arr,
-                "is_special": is_special,
                 "inbound_ok": inbound_ok,
             }
         )
 
-        journey_agg = agg_df.groupby("_uid", sort=False).agg(
+        journey_agg = journey_df.groupby("_uid", sort=False).agg(
             first_eu_dep=("eu_dep", "first"),
             last_eu_arr=("eu_arr", "last"),
-            any_special=("is_special", "any"),
-            any_eu_dep_mid=("eu_dep", "any"),
             any_inbound_ok=("inbound_ok", "any"),
         )
 
-        eligible = (
-            journey_agg["first_eu_dep"]
-            | (
-                ~journey_agg["first_eu_dep"]
-                & ~journey_agg["last_eu_arr"]
-                & journey_agg["any_special"]
-            )
-            | (
-                ~journey_agg["first_eu_dep"]
-                & journey_agg["last_eu_arr"]
-                & (
-                    journey_agg["any_eu_dep_mid"]
-                    | journey_agg["any_inbound_ok"]
-                    | journey_agg["any_special"]
-                )
-            )
+        # EU261: departure from EU, OR (non-EU departure + EU arrival + inbound_ok)
+        eu_journey_eligible = journey_agg["first_eu_dep"] | (
+            ~journey_agg["first_eu_dep"]
+            & journey_agg["last_eu_arr"]
+            & journey_agg["any_inbound_ok"]
         )
 
-        return df["_uid"].map(eligible).astype(bool)
+        # Combine all rules — FIX: include srb_journey_eligible!
+        all_eligible = (
+            uk_journey_eligible
+            | tr_journey_eligible
+            | srb_journey_eligible
+            | eu_journey_eligible
+        )
+
+        # Map back to each row
+        return df["_uid"].map(all_eligible).fillna(False).astype(bool)
 
 
 # ==================================================
@@ -355,7 +365,12 @@ class CreateTAStandardTable:
         self._configure_connection(self.write_con)
 
         ref = ReferenceData(self.read_con)
-        self.processor = ChunkProcessor(ref.eu_airports, ref.eu_carriers)
+        self.processor = ChunkProcessor(
+            ref.eu_airports,
+            ref.eu_carriers,
+            ref.tr_airports,
+            ref.uk_airports,
+        )
         self._create_target_table()
 
     @staticmethod
@@ -367,7 +382,6 @@ class CreateTAStandardTable:
 
     def _create_target_table(self):
         self.write_con.execute(f"DROP TABLE IF EXISTS {self.config.target_table}")
-        # Note: gen_random_uuid() is the standard DuckDB function (v0.9.0+)
         self.write_con.execute(f"""
             CREATE TABLE {self.config.target_table} (
                 Id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),

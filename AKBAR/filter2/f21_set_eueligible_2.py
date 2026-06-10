@@ -276,13 +276,28 @@ class ChunkProcessor:
     def _vectorized_eligibility(self, df: pd.DataFrame) -> pd.Series:
         """
         Check every leg's airline carrier:
-        1. If carrier is UK and FromAirport or ToAirport is UK → ALL legs with same _uid are Eligible
-        2. If carrier is TR and FromAirport or ToAirport is TR → ALL legs with same _uid are Eligible
-        3. If carrier is SRB and FromAirport or ToAirport is SRB → ALL legs with same _uid are Eligible
-        4. Otherwise apply EU261 rules
+        1. Domestic TR flights (First and Last airport in TR) are NEVER eligible.
+        2. If carrier is UK and FromAirport or ToAirport is UK → ALL legs with same _uid are Eligible
+        3. If carrier is TR and FromAirport or ToAirport is TR → ALL legs with same _uid are Eligible
+        4. If carrier is SRB and FromAirport or ToAirport is SRB → ALL legs with same _uid are Eligible
+        5. Otherwise apply EU261 rules
         """
         if df.empty:
             return pd.Series(dtype=bool)
+
+        # --- NEW RULE: Domestic TR flights (First and Last airport in TR) are NOT eligible ---
+        # Turkey does not pay compensation for these flights
+        sorted_legs = df.sort_values("LegNo", kind="mergesort")
+        first_airports = sorted_legs.groupby("_uid", sort=False)["FromAirport"].first()
+        last_airports = sorted_legs.groupby("_uid", sort=False)["ToAirport"].last()
+
+        # Check if both the start and end of the journey are in Turkey
+        domestic_tr_journeys = first_airports.isin(
+            self.tr_airports
+        ) & last_airports.isin(self.tr_airports)
+
+        # Map this boolean flag back to every row in the chunk
+        is_domestic_tr = df["_uid"].map(domestic_tr_journeys).fillna(False).astype(bool)
 
         # --- RULE 1: UK Carrier + UK Airport on ANY leg → entire journey eligible ---
         is_uk_carrier = df["AirlineCodes"].isin(UK_CARRIERS)
@@ -297,7 +312,7 @@ class ChunkProcessor:
         touches_tr = df["FromAirport"].isin(self.tr_airports) | df["ToAirport"].isin(
             self.tr_airports
         )
-        tr_eligible_legs = is_tr_carrier & touches_tr
+        tr_eligible_legs = is_tr_carrier & touches_tr & ~is_domestic_tr
         tr_journey_eligible = tr_eligible_legs.groupby(df["_uid"], sort=False).any()
 
         # --- RULE 3: SRB Carrier + SRB Airport on ANY leg → entire journey eligible ---
@@ -348,8 +363,12 @@ class ChunkProcessor:
             | eu_journey_eligible
         )
 
-        # Map back to each row
-        return df["_uid"].map(all_eligible).fillna(False).astype(bool)
+        # Map the combined eligibility back to each row
+        eligible_mapped = df["_uid"].map(all_eligible).fillna(False).astype(bool)
+
+        # --- APPLY OVERRIDE ---
+        # If a journey is classified as domestic TR, force it to False regardless of other rules
+        return eligible_mapped & (~is_domestic_tr)
 
 
 # ==================================================
