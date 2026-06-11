@@ -1,0 +1,24 @@
+CREATE TABLE MMT_RAW AS
+SELECT * FROM read_csv('C:/Users/cagri/Desktop/Agency/MMT/filter-0/C2R Flights Data (OND25) vs.csv',
+    header=true,
+    delim=',',
+    auto_detect=false,
+    columns={
+        'DepartureAirport': 'VARCHAR',
+        'ArrivalAirport': 'VARCHAR',
+        'Airline': 'VARCHAR',
+        'FlightNo': 'VARCHAR',
+        'DepartureDate': 'DATE',
+		'ArrivalDate': 'DATE',
+		'Bookingid': 'VARCHAR',
+		'Identifier': 'VARCHAR',
+		'PAX': 'VARCHAR',
+		'FlightNumber': 'VARCHAR'
+    },
+    dateformat = '%m/%d/%Y',
+    nullstr=''
+);
+
+
+UPDATE MMT_RAW
+SET FlightNumber = Airline || FlightNo
