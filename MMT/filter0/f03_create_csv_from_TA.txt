@@ -1,0 +1,13 @@
+COPY (
+    SELECT
+        Id, ConnectionID, BookingId, FlightNumber, DepartureDate, ArrivalDate,
+        DepartureAirport, ArrivalAirport, Airline, FlightNo, Identifier, PAX,
+        CASE WHEN IsSingleFlight THEN 1 ELSE 0 END AS IsSingleFlight
+    FROM TA_STANDARD_MMT
+)
+TO 'C:/Users/cagri/Desktop/MMT/TA_STANDARD_MMT.csv'
+WITH (
+    HEADER true,
+    DELIMITER ',',
+    NULL ''
+);
