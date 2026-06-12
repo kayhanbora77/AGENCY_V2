@@ -51,7 +51,7 @@ _RE_FLTNO = re.compile(r"^[A-Z0-9]{2,3}\d+$")
 STATIC_COLS = [
     "PaxName",
     "BookingRef",
-    "ETicketNo",  # ← correct column name in TBO_RAW
+    "ETicketNo",
     "ClientCode",
     "Airline",
     "JourneyType",

@@ -1,7 +1,5 @@
-UPDATE AKBAR_SPLIT2
-SET 
-    FlightNumber2 = NULL,
-    DepartureDateLocal2 = NULL
+update tbo_split2
+set FlightNumber2=null,DepartureDateLocal2=null
 WHERE 
     FlightNumber1 IS NOT NULL AND FlightNumber1 <> ''
     AND DepartureDateLocal1 IS NOT NULL
@@ -20,5 +18,8 @@ WHERE
 
     AND (FlightNumber6 IS NULL OR FlightNumber6 = '')
     AND DepartureDateLocal6 IS NULL
+    
+    AND (FlightNumber7 IS NULL OR FlightNumber7 = '')
+    AND DepartureDateLocal7 IS NULL
 
     AND FlightNumber1 = FlightNumber2;

@@ -1,37 +1,47 @@
-"""
-Flight Row Splitter  —  optimized for 5M+ rows
-================================================
-Reads MIDDLEEAST_RAW in chunks via fetchmany() (no OFFSET scan),
-processes splits in Python, bulk-inserts parent + children into MIDDLEEAST_SPLIT.
-
-Rules
------
-1. Airport1 == Airport3 OR Airport1 == Airport5 → always split  (NEW)
-2. Round-trip  : Airport1 == AirportLast         → split at every turnaround point
-3. One-way / connecting (ALL consecutive date gaps ≤ 1 day) → do NOT split
-4. One-way / with gap   (ANY consecutive date gap  > 1 day) → split at gaps
-"""
-
 import duckdb
 import uuid
 import os
 import time
 import pandas as pd
-from datetime import datetime
 
 # ============================================================================
 # CONFIG
 # ============================================================================
 
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
-SOURCE_TABLE = "TBO_RAW"
-TARGET_TABLE = "TBO_SPLIT"
+SOURCE_TABLE = "TBO_SPLIT"
+TARGET_TABLE = "TBO_SPLIT2"
 
 MAX_FLIGHTS = 7
 MAX_DATES = 7
 MAX_AIRPORTS = 8
 
 BATCH_SIZE = 200_000
+
+TWO_FLIGHT_WHERE_CLAUSE = """
+WHERE   (FlightNumber1 IS NOT NULL AND FlightNumber1 <> '')
+  AND (DepartureDateLocal1 IS NOT NULL)
+
+  AND (FlightNumber2 IS NOT NULL AND FlightNumber2 <> '')
+  AND (DepartureDateLocal2 IS NOT NULL)
+
+  AND (FlightNumber3 IS NULL OR FlightNumber3 = '')
+  AND (DepartureDateLocal3 IS NULL)
+
+  AND (FlightNumber4 IS NULL OR FlightNumber4 = '')
+  AND (DepartureDateLocal4 IS NULL)
+
+  AND (FlightNumber5 IS NULL OR FlightNumber5 = '')
+  AND (DepartureDateLocal5 IS NULL)
+
+  AND (FlightNumber6 IS NULL OR FlightNumber6 = '')
+  AND (DepartureDateLocal6 IS NULL)
+
+  AND (FlightNumber7 IS NULL OR FlightNumber7 = '')
+  AND (DepartureDateLocal7 IS NULL)
+
+  AND Airport1 = Airport3;
+"""
 
 # ============================================================================
 # COLUMN LISTS
@@ -46,44 +56,6 @@ DYNAMIC_COLS = FLIGHT_COLS + DATE_COLS + AIRPORT_COLS
 COL_IDX: dict = {}
 
 # ============================================================================
-# HELPERS
-# ============================================================================
-
-
-def parse_dt(val):
-    if val is None:
-        return None
-    if isinstance(val, datetime):
-        return val
-    s = str(val).strip()[:19]
-    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
-        try:
-            return datetime.strptime(s, fmt)
-        except ValueError:
-            pass
-    return None
-
-
-def day_gap(d1, d2):
-    a, b = parse_dt(d1), parse_dt(d2)
-    if a is None or b is None:
-        return None
-    return abs((b - a).days)
-
-
-def is_valid(val):
-    if val is None:
-        return False
-    if isinstance(val, float):
-        import math
-
-        return not math.isnan(val)
-    if isinstance(val, str):
-        return val.strip() != ""
-    return True
-
-
-# ============================================================================
 # ROW-LEVEL SPLIT LOGIC
 # ============================================================================
 
@@ -93,28 +65,30 @@ def get_flights_airports(row_list):
     for i in range(MAX_FLIGHTS):
         fn = row_list[COL_IDX[f"FlightNumber{i + 1}"]]
         fd = row_list[COL_IDX[f"DepartureDateLocal{i + 1}"]]
-        if is_valid(fn) and is_valid(fd):
-            fn = fn if isinstance(fn, str) else str(fn)
-            fd = fd if isinstance(fd, str) else str(fd)
-            flights.append((fn.strip(), fd.strip()))
+        if (
+            fn is not None
+            and fd is not None
+            and str(fn).strip() != ""
+            and str(fd).strip() != ""
+        ):
+            flights.append((str(fn).strip(), str(fd).strip()))
 
     airports = []
     for c in AIRPORT_COLS:
         v = row_list[COL_IDX[c]]
-        if is_valid(v):
-            airports.append(v.strip())
+        if v is not None and str(v).strip() != "":
+            airports.append(str(v).strip())
 
     return flights, airports
 
 
 def find_all_split_points(flights, airports):
     """
-    Rules:
-    1. Round-trip (Airport1 == AirportLast):
-         a. Split at every interior airport that matches origin
-         b. No interior match → out-and-back with stopover:
-            split at midpoint (covers Airport1==Airport3 and Airport1==Airport5 cases)
-    2. Date gap > 1 day → split at that flight boundary
+    Rule 1 — Exactly 2 flights, Airport1 == Airport3 (round-trip with one stop):
+        e.g. HAS → RUH → HAS
+        Split into:
+          Segment 1: FlightNumber1 | Airport1 → Airport2
+          Segment 2: FlightNumber2 | Airport2 → Airport1
     """
     n_f = len(flights)
     n_a = len(airports)
@@ -124,28 +98,9 @@ def find_all_split_points(flights, airports):
 
     split_points = set()
 
-    # ── Rule 1: round-trip (Airport1 == AirportLast) ─────────────────────────
-    if n_a >= 3 and airports[-1] == airports[0]:
-        origin = airports[0]
-
-        interior_matches = [j for j in range(1, n_a - 1) if airports[j] == origin]
-        for j in interior_matches:
-            split_points.add(j)
-
-        # No interior airport matches → out-and-back with stopover
-        # e.g. ELQ→RUH→GIZ→RUH→ELQ  mid=2 → ELQ→RUH→GIZ | GIZ→RUH→ELQ
-        # e.g. MED→JED→TUU→RUH→MED  mid=2 → MED→JED→TUU | TUU→RUH→MED
-        # e.g. AAA→BBB→AAA           mid=1 → AAA→BBB | BBB→AAA
-        if not interior_matches:
-            mid = n_a // 2
-            if mid < n_f:
-                split_points.add(mid)
-
-    # ── Rule 2: date gap > 1 day ─────────────────────────────────────────────
-    for i in range(n_f - 1):
-        gap = day_gap(flights[i][1], flights[i + 1][1])
-        if gap is not None and gap > 1:
-            split_points.add(i + 1)
+    # ── Rule 1: exactly 2 flights and Airport1 == Airport3 ───────────────────
+    if n_f == 2 and n_a == 3 and airports[0] == airports[2]:
+        split_points.add(1)
 
     return sorted(split_points)
 
@@ -171,13 +126,8 @@ def build_child_list(parent_list, all_cols, flights_slice, airports_slice, paren
 
 def process_batch(rows_df, all_cols):
     """
-    Option C: SPLIT is fully self-contained.
-    - Rows with NO split → copied as-is into SPLIT
-    - Rows WITH a split  → only their children go into SPLIT (parent is NOT copied)
-
-    Returns:
-        unsplit_df  — rows that need no splitting (pass-through)
-        children_df — child segment rows (ParentId set)
+    - Rows with NO split  → copied as-is into TARGET
+    - Rows WITH a split   → only their children go into TARGET (parent is NOT copied)
     """
     unsplit_rows = []
     child_rows = []
@@ -189,7 +139,6 @@ def process_batch(rows_df, all_cols):
         split_points = find_all_split_points(flights, airports)
 
         if not split_points:
-            # No split → row goes to SPLIT as-is
             unsplit_rows.append(list(row_list))
             continue
 
@@ -244,7 +193,6 @@ def ensure_parent_id_column(con, table):
 
 
 def ensure_target_table(con, source_table, target_table):
-    """Drop if exists, then recreate with same schema as source."""
     con.execute(f'DROP TABLE IF EXISTS "{target_table}"')
     con.execute(
         f'CREATE TABLE "{target_table}" AS SELECT * FROM "{source_table}" WHERE 1=0'
@@ -267,7 +215,7 @@ def process_table(db_path=DB_PATH, table=SOURCE_TABLE, batch_size=BATCH_SIZE):
         pass
 
     ensure_parent_id_column(con, table)
-    ensure_target_table(con, table, TARGET_TABLE)  # NEW: auto-create target if missing
+    ensure_target_table(con, table, TARGET_TABLE)
 
     all_cols = col_names(con, table)
 
@@ -275,15 +223,37 @@ def process_table(db_path=DB_PATH, table=SOURCE_TABLE, batch_size=BATCH_SIZE):
     COL_IDX = {c: i for i, c in enumerate(all_cols)}
 
     col_list = ", ".join(f'"{c}"' for c in all_cols)
-    total = con.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
+
+    t0 = time.time()
+
+    # ── Step 1: Copy ALL rows from SOURCE into TARGET as baseline ─────────────
+    print(f"  Step 1: Copying all rows from '{table}' into '{TARGET_TABLE}'...")
+    con.execute(f"""
+        INSERT INTO "{TARGET_TABLE}" ({col_list})
+        SELECT {col_list} FROM "{table}"
+    """)
+    total_source = con.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
+    print(f"  Copied {total_source:,} rows into '{TARGET_TABLE}'.")
+
+    # ── Step 2: Count only the 2-flight rows to process ──────────────────────
+    filtered_total = con.execute(f"""
+        SELECT COUNT(*)
+        FROM "{table}"
+        {TWO_FLIGHT_WHERE_CLAUSE}
+    """).fetchone()[0]
+    print(f"\n  Step 2: Processing {filtered_total:,} 2-flight rows for split...")
 
     unsplit_total = 0
     split_count = 0
     child_count = 0
-    t0 = time.time()
+    split_parent_ids = []
 
     cursor = con.cursor()
-    cursor.execute(f'SELECT {col_list} FROM "{table}" WHERE "ParentId" IS NULL')
+    cursor.execute(f"""
+        SELECT {col_list}
+        FROM "{table}"
+        {TWO_FLIGHT_WHERE_CLAUSE}
+    """)
 
     while True:
         raw = cursor.fetchmany(batch_size)
@@ -293,28 +263,42 @@ def process_table(db_path=DB_PATH, table=SOURCE_TABLE, batch_size=BATCH_SIZE):
         batch_df = pd.DataFrame(raw, columns=all_cols)
         unsplit_df, children_df = process_batch(batch_df, all_cols)
 
-        if not unsplit_df.empty:
-            con.execute(
-                f'INSERT INTO "{TARGET_TABLE}" ({col_list}) SELECT * FROM unsplit_df'
-            )
-            unsplit_total += len(unsplit_df)
+        # Unsplit rows (Airport1 != Airport3) already exist in TARGET — skip
+        unsplit_total += len(unsplit_df)
 
         if not children_df.empty:
+            # Insert children into TARGET
             con.execute(
                 f'INSERT INTO "{TARGET_TABLE}" ({col_list}) SELECT * FROM children_df'
             )
             child_count += len(children_df)
             split_count += children_df["ParentId"].nunique()
 
+            split_parent_ids.extend(children_df["ParentId"].dropna().unique().tolist())
+
         elapsed = time.time() - t0
         rate = (unsplit_total + split_count) / elapsed if elapsed > 0 else 0
         print(
-            f"  {unsplit_total + split_count:>10,} / {total:,} scanned  |"
+            f"  {unsplit_total + split_count:>10,} / {filtered_total:,} scanned  |"
             f"  {split_count:>6,} splits  |"
             f"  {child_count:>8,} children  |  {rate:>8,.0f} rows/sec"
         )
 
     cursor.close()
+
+    # ── Step 3: Delete original split rows from TARGET (already copied in Step 1)
+    if split_parent_ids:
+        print(
+            f"\n  Step 3: Deleting {len(split_parent_ids):,} original split rows from '{TARGET_TABLE}'..."
+        )
+        id_df = pd.DataFrame({"pid": split_parent_ids})
+        con.execute(f"""
+            DELETE FROM "{TARGET_TABLE}"
+            WHERE CAST(id AS VARCHAR) IN (SELECT pid FROM id_df)
+        """)
+        print(
+            f"  Deleted {len(split_parent_ids):,} original rows from '{TARGET_TABLE}'."
+        )
 
     final_count = con.execute(f'SELECT COUNT(*) FROM "{TARGET_TABLE}"').fetchone()[0]
     con.close()
@@ -322,12 +306,12 @@ def process_table(db_path=DB_PATH, table=SOURCE_TABLE, batch_size=BATCH_SIZE):
     elapsed = time.time() - t0
     print(f"\n{'=' * 65}")
     print(f"DONE  ({elapsed:.1f}s)")
-    print(f"  Source rows scanned  : {total:,}")
+    print(f"  Source rows (total)  : {total_source:,}")
     print(f"  Rows NOT split       : {unsplit_total:,}")
     print(f"  Rows split           : {split_count:,}")
     print(f"  Children added       : {child_count:,}")
-    print(f"  Expected in SPLIT    : {unsplit_total + child_count:,}")
-    print(f"  Actual   in SPLIT    : {final_count:,}")
+    print(f"  Expected in TARGET   : {total_source + child_count - split_count:,}")
+    print(f"  Actual   in TARGET   : {final_count:,}")
     print(f"{'=' * 65}\n")
 
 

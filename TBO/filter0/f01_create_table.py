@@ -6,7 +6,7 @@ from pathlib import Path
 # CONFIG
 # ==================================================
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
-CSV_PATH = r"C:\Users\cagri\Desktop\Agency\TBO\RAW_DATA\BookingData_DeptDate_01Aug2025_30Apr2026.csv"
+CSV_PATH = r"C:\Users\cagri\Desktop\Agency_Data\TBO\filter-0\BookingData_DeptDate_01Aug2025_30Apr2026.csv"
 
 
 # ==================================================
