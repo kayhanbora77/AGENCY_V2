@@ -3,12 +3,12 @@ Flight Row Splitter  —  optimized for 5M+ rows
 ================================================
 Rules
 -----
-1. count(FlightNo) > count(FlightDate)  → insert into MIDDLEEAST_REJECTION
-2. count(FlightNo) <= count(FlightDate) → trim to count(FlightNo) flights/dates,
-                                          keep other columns (DAIS, TRNN, etc.) unchanged
-3. count(Airport)  = count(FlightNo) + 1 (trim airports accordingly)
-4. Any consecutive date gap > 1 day     → split at that boundary
-   All consecutive date gaps <= 1 day   → do NOT split
+1. count(FLIGHTNO) > count(DEPARTURE_DATE)  → insert into THOMASCOOK_REJECTION
+2. count(FLIGHTNO) <= count(DEPARTURE_DATE) → trim to count(FlightNo) flights/dates,
+                                              keep other columns unchanged
+3. count(FLIGHTNO) <= count(SECTOR)         → trim SECTOR accordingly
+4. Any consecutive date gap > 1 day         → split at that boundary
+   All consecutive date gaps <= 1 day       → do NOT split
 """
 
 import duckdb
@@ -30,8 +30,9 @@ TARGET_TABLE = "THOMASCOOK_SPLIT"
 REJECT_TABLE = "THOMASCOOK_REJECTION"
 
 MAX_FLIGHTS = 9
-MAX_DATES = 12
-MAX_AIRPORTS = 13
+MAX_DEPARTURE_DATES = 12  # FIX: table has 12 departure date slots
+MAX_ARRIVAL_DATES = 12  # FIX: table has 12 arrival date slots
+MAX_SECTORS = 12  # FIX: table has 12 sector slots
 
 BATCH_SIZE = 200_000
 
@@ -39,13 +40,14 @@ BATCH_SIZE = 200_000
 # COLUMN LISTS
 # ============================================================================
 
-FLIGHT_COLS = [f"FlightNo{i + 1}" for i in range(MAX_FLIGHTS)]
-DATE_COLS = [f"DepartureDate{i + 1}" for i in range(MAX_DATES)]
-AIRPORT_COLS = [f"Airport{i + 1}" for i in range(MAX_AIRPORTS)]
-DYNAMIC_COLS = FLIGHT_COLS + DATE_COLS + AIRPORT_COLS
+FLIGHT_COLS = [f"FLIGHTNO{i + 1}" for i in range(MAX_FLIGHTS)]
+DEPARTURE_DATE_COLS = [f"DEPARTURE_DATE{i + 1}" for i in range(MAX_DEPARTURE_DATES)]
+ARRIVAL_DATE_COLS = [f"ARRIVAL_DATE{i + 1}" for i in range(MAX_ARRIVAL_DATES)]
+SECTOR_COLS = [f"SECTOR{i + 1}" for i in range(MAX_SECTORS)]
+DYNAMIC_COLS = FLIGHT_COLS + DEPARTURE_DATE_COLS + ARRIVAL_DATE_COLS + SECTOR_COLS
 
 _RE_FLTNO = re.compile(r"^[A-Z0-9]{2,3}\d+$")
-# Columns that are always carried through unchanged
+
 STATIC_COLS = [
     "COMPANY",
     "AIRLINE_PNR",
@@ -56,17 +58,16 @@ STATIC_COLS = [
     "AIRLINE_CARRIER_CODE",
     "AIRLINE_CARRIER_NAME",
     "STATUS",
-    "ARRVLDATETIME",
 ]
 
 COL_IDX: dict = {}
 
-
 # ============================================================================
 # HELPERS
 # ============================================================================
+
+
 def _isna(val) -> bool:
-    """True if val is None, NaN, or blank-after-strip."""
     if val is None:
         return True
     if isinstance(val, float) and math.isnan(val):
@@ -77,39 +78,33 @@ def _isna(val) -> bool:
 
 
 def normalize_flight_numbers(row: dict) -> dict:
-    """
-    Rule 7 — strip leading zeros between prefix letters and digit suffix.
-    Mutates a copy of the row dict.
-    """
     row = dict(row)
     for i in range(1, MAX_FLIGHTS + 1):
-        fn = row.get(f"FlightNo{i}")
+        fn = row.get(f"FLIGHTNO{i}")
         if not _isna(fn):
-            fn_str = str(fn).strip()
-            fn_upper = fn_str.upper()
-            if _RE_FLTNO.fullmatch(fn_upper):
-                row[f"FlightNo{i}"] = _normalize_flightno(fn_upper)
+            fn_str = str(fn).strip().upper()
+            if _RE_FLTNO.fullmatch(fn_str):
+                row[f"FLIGHTNO{i}"] = _normalize_flightno(fn_str)
     return row
 
 
 def _normalize_flightno(fn: str) -> str:
-    """
-    Remove leading zeros between the alphabetic prefix and the numeric suffix.
-    E.g.  SV0020 → SV20,  AF0459 → AF459,  EK001 → EK1
-    Assumes fn is already stripped and uppercased.
-    """
-    m = re.fullmatch(r"([A-Z0-9]{2,3}?)(\d+)", fn.upper().strip())
+    m = re.fullmatch(r"([A-Z0-9]{2,3}?)(\d+)", fn)
     if not m:
         return fn
     prefix, digits = m.group(1), m.group(2)
-    # Strip leading zeros from the digit part, but keep at least '0' if all zeros
-    normalized_digits = digits.lstrip("0") or "0"
-    return prefix + normalized_digits
+    return prefix + (digits.lstrip("0") or "0")
 
 
 def parse_dt(val):
     if val is None:
         return None
+    # Catches pandas NaT, float NaN, and anything pd.isnull recognises
+    try:
+        if pd.isnull(val):
+            return None
+    except (TypeError, ValueError):
+        pass
     if isinstance(val, datetime):
         return val
     s = str(val).strip()[:19]
@@ -125,15 +120,13 @@ def day_gap(d1, d2):
     a, b = parse_dt(d1), parse_dt(d2)
     if a is None or b is None:
         return None
-    return abs((b - a).days)
+    return abs((b.date() - a.date()).days)
 
 
 def is_valid(val):
     if val is None:
         return False
     if isinstance(val, float):
-        import math
-
         return not math.isnan(val)
     if isinstance(val, str):
         return val.strip() != ""
@@ -148,49 +141,50 @@ def is_valid(val):
 def extract_and_validate(row_list):
     """
     Returns:
-        "reject"  — count(FlightNo) > count(FlightDate)   [Rule 1]
-        flights   — list of (FlightNo, FlightDate) tuples  [Rule 2, trimmed]
-        airports  — list of airport strings                 [Rule 3, trimmed]
+        ("reject", None, None)  — count(FLIGHTNO) > count(DEPARTURE_DATE)  [Rule 1]
+        (flights, sectors, cnt_no)  — trimmed lists  [Rules 2 & 3]
 
-    Rule 2: take only the first count(FlightNo) dates
-    Rule 3: airports trimmed to count(FlightNo) + 1
+    flights  : list of (FLIGHTNO, DEPARTURE_DATE, ARRIVAL_DATE) trimmed to cnt_no
+    sectors  : list of SECTOR strings trimmed to cnt_no
     """
-    # Count valid FlightNos and FlightDates
     flight_nos = []
     for i in range(MAX_FLIGHTS):
-        v = row_list[COL_IDX[f"FlightNo{i + 1}"]]
+        v = row_list[COL_IDX[f"FLIGHTNO{i + 1}"]]
         if is_valid(v):
             flight_nos.append(v.strip() if isinstance(v, str) else str(v))
 
-    flight_dates = []
-    for i in range(MAX_DATES):
-        v = row_list[COL_IDX[f"FlightDate{i + 1}"]]
+    departure_dates = []
+    for i in range(MAX_DEPARTURE_DATES):
+        v = row_list[COL_IDX[f"DEPARTURE_DATE{i + 1}"]]
         if is_valid(v):
-            flight_dates.append(v.strip() if isinstance(v, str) else str(v))
+            departure_dates.append(v)
+
+    arrival_dates = []
+    for i in range(MAX_ARRIVAL_DATES):
+        v = row_list[COL_IDX[f"ARRIVAL_DATE{i + 1}"]]
+        if is_valid(v):
+            arrival_dates.append(v)
 
     cnt_no = len(flight_nos)
-    cnt_date = len(flight_dates)
+    cnt_dep = len(departure_dates)
 
-    # Rule 1: more flight numbers than dates → reject
-    if cnt_no > cnt_date:
+    # Rule 1: more flight numbers than departure dates → reject
+    if cnt_no > cnt_dep:
         return "reject", None, None
 
-    # Rule 2: trim dates to match flight number count
-    # (if cnt_no <= cnt_date, we only keep the first cnt_no dates)
-    trimmed_dates = flight_dates[:cnt_no]
-    flights = list(zip(flight_nos, trimmed_dates))  # [(fn, fd), ...]
+    # Rule 2 & 3: trim to cnt_no
+    trimmed_dep = departure_dates[:cnt_no]
+    trimmed_arr = arrival_dates[:cnt_no]  # may be shorter than cnt_no; that's fine
+    flights = list(zip(flight_nos, trimmed_dep, trimmed_arr))
 
-    # Rule 3: airports trimmed to cnt_no + 1
-    all_airports = []
-    for i in range(MAX_AIRPORTS):
-        v = row_list[COL_IDX[f"Airport{i + 1}"]]
+    all_sectors = []
+    for i in range(MAX_SECTORS):
+        v = row_list[COL_IDX[f"SECTOR{i + 1}"]]
         if is_valid(v):
-            all_airports.append(v.strip() if isinstance(v, str) else str(v))
+            all_sectors.append(v.strip() if isinstance(v, str) else str(v))
+    sectors = all_sectors[:cnt_no]
 
-    max_airports = cnt_no + 1
-    airports = all_airports[:max_airports]
-
-    return flights, airports, cnt_no
+    return flights, sectors, cnt_no
 
 
 # ============================================================================
@@ -200,9 +194,8 @@ def extract_and_validate(row_list):
 
 def find_split_points(flights):
     """
-    Rule 4: split wherever consecutive FlightDate gap > 1 day.
-    Returns sorted list of split indices (position in flights list where
-    a new segment begins).
+    Split wherever consecutive DEPARTURE_DATE gap > 1 day.
+    Returns sorted list of indices where a new segment begins.
     """
     split_points = []
     for i in range(len(flights) - 1):
@@ -217,25 +210,27 @@ def find_split_points(flights):
 # ============================================================================
 
 
-def build_child_row(parent_list, flights_slice, airports_slice, parent_id):
-    """Clone parent, clear dynamic cols, fill in segment data."""
+def build_child_row(parent_list, flights_slice, sectors_slice, parent_id):
+    """Clone parent, clear all dynamic cols, fill in segment data."""
     child = list(parent_list)
 
-    # Clear all dynamic columns first
+    # Clear all dynamic columns
     for c in DYNAMIC_COLS:
         child[COL_IDX[c]] = None
 
-    # Fill flights
-    for i, (fn, fd) in enumerate(flights_slice):
-        child[COL_IDX[f"FlightNo{i + 1}"]] = fn
-        child[COL_IDX[f"FlightDate{i + 1}"]] = fd
+    # FIX: write to correct column names (FLIGHTNO, DEPARTURE_DATE, ARRIVAL_DATE, SECTOR)
+    for i, (fn, dep_dt, arr_dt) in enumerate(flights_slice):
+        child[COL_IDX[f"FLIGHTNO{i + 1}"]] = fn
+        child[COL_IDX[f"DEPARTURE_DATE{i + 1}"]] = dep_dt
+        child[COL_IDX[f"ARRIVAL_DATE{i + 1}"]] = arr_dt
 
-    # Fill airports
-    for i, ap in enumerate(airports_slice):
-        child[COL_IDX[f"Airport{i + 1}"]] = ap
+    for i, sec in enumerate(sectors_slice):
+        child[COL_IDX[f"SECTOR{i + 1}"]] = sec
 
     # New identity
-    child[COL_IDX["id"]] = str(uuid.uuid4())
+    # FIX: column is "Id" (capital I) — match exact casing from information_schema
+    id_col = next(c for c in COL_IDX if c.lower() == "id")
+    child[COL_IDX[id_col]] = str(uuid.uuid4())
     child[COL_IDX["ParentId"]] = str(parent_id)
 
     return child
@@ -247,17 +242,6 @@ def build_child_row(parent_list, flights_slice, airports_slice, parent_id):
 
 
 def process_batch(rows_df, all_cols):
-    """
-    For each row:
-      - Reject  → rejection_rows   (Rule 1)
-      - No split → write trimmed row to unsplit_rows  (Rules 2+3, no gap)
-      - Split   → write children to child_rows        (Rules 2+3+4)
-
-    Returns:
-        unsplit_df    — pass-through rows (trimmed per rules 2 & 3)
-        children_df   — split child rows
-        rejection_df  — rows violating rule 1
-    """
     unsplit_rows = []
     child_rows = []
     rejection_rows = []
@@ -265,58 +249,57 @@ def process_batch(rows_df, all_cols):
     records = rows_df.values.tolist()
 
     for row_list in records:
-        # ── Rule 7: normalize FlightNo values (strip leading zeros) ───────
+        # Rule 7: normalize flight numbers
         row_dict = dict(zip(all_cols, row_list))
         row_dict = normalize_flight_numbers(row_dict)
         row_list = [row_dict[c] for c in all_cols]
 
-        result, airports, cnt_no = extract_and_validate(row_list)
+        result, sectors, cnt_no = extract_and_validate(row_list)
 
-        # ── Rule 1: reject ────────────────────────────────────────────────
+        # Rule 1: reject
         if result == "reject":
             rejection_rows.append(list(row_list))
             continue
 
-        flights = result  # list of (fn, fd)
+        flights = result  # list of (fn, dep_dt, arr_dt)
 
-        # ── Apply trim back onto row (Rules 2 & 3) ────────────────────────
-        # Clear all dynamic cols, then re-populate with trimmed data
+        # Apply trim back onto row (Rules 2 & 3)
         trimmed_row = list(row_list)
         for c in DYNAMIC_COLS:
             trimmed_row[COL_IDX[c]] = None
-        for i, (fn, fd) in enumerate(flights):
-            trimmed_row[COL_IDX[f"FlightNo{i + 1}"]] = fn
-            trimmed_row[COL_IDX[f"FlightDate{i + 1}"]] = fd
-        for i, ap in enumerate(airports):
-            trimmed_row[COL_IDX[f"Airport{i + 1}"]] = ap
+        for i, (fn, dep_dt, arr_dt) in enumerate(flights):
+            trimmed_row[COL_IDX[f"FLIGHTNO{i + 1}"]] = fn
+            trimmed_row[COL_IDX[f"DEPARTURE_DATE{i + 1}"]] = dep_dt
+            trimmed_row[COL_IDX[f"ARRIVAL_DATE{i + 1}"]] = arr_dt
+        for i, sec in enumerate(sectors):
+            trimmed_row[COL_IDX[f"SECTOR{i + 1}"]] = sec
 
-        # ── Rule 4: check for date gaps ───────────────────────────────────
+        # Rule 4: check for date gaps
         split_points = find_split_points(flights)
 
         if not split_points:
-            # No gap → write trimmed row as-is
             unsplit_rows.append(trimmed_row)
             continue
 
-        # Has gap → produce children
-        parent_id = row_list[COL_IDX["id"]]
+        # Split into children
+        # FIX: use the correct column to get parent id
+        id_col = next(c for c in COL_IDX if c.lower() == "id")
+        parent_id = row_list[COL_IDX[id_col]]
         boundaries = [0] + split_points + [len(flights)]
 
         for k in range(len(boundaries) - 1):
             f_start = boundaries[k]
             f_end = boundaries[k + 1]
-            # Airport slice: share the endpoint airport between segments
-            a_start = f_start
-            a_end = f_end + 1  # +1 to include the arrival airport
 
-            seg_flights = flights[a_start:f_end]
-            seg_airports = airports[a_start : min(a_end, len(airports))]
+            seg_flights = flights[f_start:f_end]
+            # Sectors align 1-to-1 with flights (Rule 3)
+            seg_sectors = sectors[f_start:f_end]
 
             if not seg_flights:
                 continue
 
             child_rows.append(
-                build_child_row(trimmed_row, seg_flights, seg_airports, parent_id)
+                build_child_row(trimmed_row, seg_flights, seg_sectors, parent_id)
             )
 
     empty = pd.DataFrame(columns=all_cols)
@@ -337,7 +320,7 @@ def process_batch(rows_df, all_cols):
 def col_names(con, table):
     rows = con.execute(
         "SELECT column_name FROM information_schema.columns "
-        f"WHERE table_name = '{table}' ORDER BY ordinal_position"
+        f"WHERE LOWER(table_name) = LOWER('{table}') ORDER BY ordinal_position"
     ).fetchall()
     return [r[0] for r in rows]
 
@@ -346,11 +329,12 @@ def ensure_parent_id_column(con, table):
     cols = col_names(con, table)
     if "ParentId" not in cols:
         con.execute(f'ALTER TABLE "{table}" ADD COLUMN "ParentId" UUID')
+        cols.append("ParentId")
         print("  Added ParentId column.")
+    return cols  # FIX: return updated list (original omitted this)
 
 
 def ensure_target_table(con, source_table, target_table):
-    """Drop and recreate target table with same schema as source."""
     con.execute(f'DROP TABLE IF EXISTS "{target_table}"')
     con.execute(
         f'CREATE TABLE "{target_table}" AS SELECT * FROM "{source_table}" WHERE 1=0'
@@ -359,7 +343,6 @@ def ensure_target_table(con, source_table, target_table):
 
 
 def ensure_rejection_table(con, source_table, reject_table):
-    """Drop and recreate rejection table with same schema as source."""
     con.execute(f'DROP TABLE IF EXISTS "{reject_table}"')
     con.execute(
         f'CREATE TABLE "{reject_table}" AS SELECT * FROM "{source_table}" WHERE 1=0'
@@ -380,10 +363,12 @@ def process_table(db_path=DB_PATH, table=SOURCE_TABLE, batch_size=BATCH_SIZE):
     except Exception:
         pass
 
-    ensure_parent_id_column(con, table)
+    # FIX: capture returned cols after ParentId may have been added
+    all_cols = ensure_parent_id_column(con, table)
     ensure_target_table(con, table, TARGET_TABLE)
     ensure_rejection_table(con, table, REJECT_TABLE)
 
+    # Re-read cols from DB to be authoritative (ensure_target adds ParentId to source)
     all_cols = col_names(con, table)
 
     global COL_IDX
@@ -393,7 +378,7 @@ def process_table(db_path=DB_PATH, table=SOURCE_TABLE, batch_size=BATCH_SIZE):
     total = con.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
 
     unsplit_total = 0
-    split_count = 0
+    split_count = 0  # number of parent rows that were split
     child_count = 0
     reject_count = 0
     t0 = time.time()
@@ -429,6 +414,7 @@ def process_table(db_path=DB_PATH, table=SOURCE_TABLE, batch_size=BATCH_SIZE):
             reject_count += len(rejection_df)
 
         elapsed = time.time() - t0
+        # FIX: scanned = rows consumed from source, not child count
         scanned = unsplit_total + split_count + reject_count
         rate = scanned / elapsed if elapsed > 0 else 0
         print(
