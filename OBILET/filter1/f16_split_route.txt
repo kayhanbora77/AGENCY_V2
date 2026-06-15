@@ -1,0 +1,109 @@
+SELECT * FROM OBILET_SPLIT4
+WHERE FlightNumber4 IS NOT NULL
+
+
+    INSERT INTO OBILET_SPLIT4
+        (Id, PaxName, BookingRef, Airline, AirlineCode, ETicketNo, 
+        FlightNumber1, FlightNumber2,  
+        DepartureDateLocal1, DepartureDateLocal2, 
+        AirportIataCode1, AirportIataCode2, AirportIataCode3, 
+        ParentId)
+    VALUES 
+        (gen_random_uuid(), 
+        'UMIT TANIK', '2F2QM4', 'AJet', 'VF', '2.04E+12',
+        'VF3037', 'VF179',
+        '2025-03-21 00:00:00', '2025-03-22 00:00:00', 
+        'AYT', 'SAW', 'GYD', 
+        'd6fb55fe-86f9-4372-a565-29b49b190048');
+
+    -- 2. Insert second split row (later legs)
+    INSERT INTO OBILET_SPLIT4 
+        (Id, PaxName, BookingRef, Airline, AirlineCode, ETicketNo, 
+        FlightNumber1, FlightNumber2, 
+        DepartureDateLocal1, DepartureDateLocal2,
+        AirportIataCode1, AirportIataCode2, AirportIataCode3,
+        ParentId)
+    VALUES 
+        (gen_random_uuid(), 
+        'UMIT TANIK', '2F2QM4', 'AJet', 'VF', '2.04E+12',
+        'VF578', 'VF4008',
+        '2025-03-23 00:00:00', '2025-03-23 00:00:00',
+        'GYD', 'ESB', 'AYT',
+        'd6fb55fe-86f9-4372-a565-29b49b190048');
+
+    --3.Remove original row
+    DELETE FROM OBILET_SPLIT4 WHERE Id='d6fb55fe-86f9-4372-a565-29b49b190048'
+
+-------------------------------------------------------------
+---------------------------------------------------------------
+
+INSERT INTO OBILET_SPLIT4
+    (Id, PaxName, BookingRef, Airline, AirlineCode, ETicketNo, 
+     FlightNumber1, FlightNumber2,  
+     DepartureDateLocal1, DepartureDateLocal2, 
+     AirportIataCode1, AirportIataCode2, AirportIataCode3, 
+     ParentId)
+VALUES 
+    (gen_random_uuid(), 
+     'ALIOSMAN GOKTAS', '2F3JEG', 'AJet', 'VF', '2.04E+12',
+     'VF3037', 'VF179',
+     '2025-03-19 00:00:00.000', '2025-03-20 00:00:00.000', 
+     'SZF', 'SAW', 'GYD', 
+     '83f4e4bb-120e-46f6-b89f-6379be0f3a0d');
+
+-- 2. Insert second split row (later legs)
+INSERT INTO OBILET_SPLIT4
+    (Id, PaxName, BookingRef, Airline, AirlineCode, ETicketNo, 
+     FlightNumber1, FlightNumber2,  
+     DepartureDateLocal1, DepartureDateLocal2, 
+     AirportIataCode1, AirportIataCode2, AirportIataCode3, 
+     ParentId)
+VALUES 
+    (gen_random_uuid(), 
+     'ALIOSMAN GOKTAS', '2F3JEG', 'AJet', 'VF', '2.04E+12',
+     'VF578', 'VF4278',
+     '2025-03-21 00:00:00.000', '2025-03-21 00:00:00.000', 
+     'GYD', 'ESB', 'SZF', 
+     '83f4e4bb-120e-46f6-b89f-6379be0f3a0d');
+
+--3.Remove original row
+DELETE FROM OBILET_SPLIT4 WHERE Id='83f4e4bb-120e-46f6-b89f-6379be0f3a0d'
+
+---------------------------------------------------------------
+---------------------------------------------------------------
+
+-- 1. Insert first split row (first legs)
+INSERT INTO OBILET_SPLIT4
+    (Id, PaxName, BookingRef, Airline, AirlineCode, ETicketNo, 
+     FlightNumber1, FlightNumber2,  
+     DepartureDateLocal1, DepartureDateLocal2, 
+     AirportIataCode1, AirportIataCode2, AirportIataCode3, 
+     ParentId)
+VALUES 
+    (gen_random_uuid(), 
+     'MOHAMMEDSALEHSBAHI ALINIZI', 'BJ4CQE', 'Pegasus', 'PC', '6.24E+12',
+     'PC2021', 'PC818',
+     '2025-03-01 00:00:00.000', '2025-03-02 00:00:00.000', 
+     'AYT', 'SAW', 'EBL', 
+     '8227ca6e-8614-4a77-8b1c-84ac4bc40b31');
+
+-- 2. Insert second split row (later legs)
+INSERT INTO OBILET_SPLIT4
+    (Id, PaxName, BookingRef, Airline, AirlineCode, ETicketNo, 
+     FlightNumber1, FlightNumber2,  
+     DepartureDateLocal1, DepartureDateLocal2, 
+     AirportIataCode1, AirportIataCode2, AirportIataCode3, 
+     ParentId)
+VALUES 
+    (gen_random_uuid(), 
+     'MOHAMMEDSALEHSBAHI ALINIZI', 'BJ4CQE', 'Pegasus', 'PC', '6.24E+12',
+     'PC1705', 'PC8042',
+     '2025-03-02 00:00:00.000', '2025-03-02 00:00:00.000', 
+     'EBL', 'ESB', 'AYT', 
+     '8227ca6e-8614-4a77-8b1c-84ac4bc40b31');
+
+--3.Remove original row
+DELETE FROM OBILET_SPLIT4 WHERE Id='8227ca6e-8614-4a77-8b1c-84ac4bc40b31'
+
+---------------------------------------------------------------
+---------------------------------------------------------------
