@@ -81,8 +81,8 @@ class Reason(str, Enum):
 # HELPERS
 # ============================================================================
 
-_RE_FLTNO = re.compile(r"^[A-Z]{1,3}\d+$")
-_RE_AIRLINECODE_23 = re.compile(r"^[A-Za-z]{2,3}$")
+_RE_FLTNO = re.compile(r"^(?:[A-Z]{3}|[A-Z0-9]{2})\d+$")
+_RE_AIRLINECODE_23 = re.compile(r"^[A-Za-z0-9]{2,3}$")
 _RE_AIRPORT_3 = re.compile(r"^[A-Za-z]{3}$")
 
 _DATE_FMTS = [
