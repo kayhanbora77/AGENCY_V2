@@ -192,8 +192,8 @@ class ChunkProcessor:
         conn_map = {uid: str(uuid.uuid4()) for uid in uid_list}
         all_legs["ConnectionID"] = all_legs["_uid"].map(conn_map)
 
-        if "AirlineCodes" in all_legs.columns:
-            all_legs = all_legs.rename(columns={"AirlineCodes": "AirlineCode"})
+        # if "AirlineCodes" in all_legs.columns:
+        #    all_legs = all_legs.rename(columns={"AirlineCodes": "AirlineCode"})
 
         # High-speed static configuration initialization
         placeholders = {
@@ -215,18 +215,20 @@ class ChunkProcessor:
         return all_legs[self._target_cols].reset_index(drop=True)
 
     def _extract_leg(self, df: pd.DataFrame, leg_num: int) -> Optional[pd.DataFrame]:
-        fn_col = f"FlightNo{leg_num}"
-        fd_col = f"FlightDate{leg_num}"
-        ap_from = f"Airport{leg_num}"
-        ap_to = f"Airport{leg_num + 1}"
+        # Map your actual column names
+        fn_col = f"FlightNumber{leg_num}"
+        fd_col = f"DepartureDateLocal{leg_num}"
+        ap_from = f"AirportIataCode{leg_num}"
+        ap_to = f"AirportIataCode{leg_num + 1}"
 
-        required = [fn_col, fd_col, ap_from, ap_to]
-        if not all(c in df.columns for c in required):
+        # Check if columns exist (you have up to 6 flights)
+        if fn_col not in df.columns or fd_col not in df.columns:
             return None
 
-        # Pre-clean strings (handles "nan", "NaN", spaces, etc. in one pass)
+        # Clean flight numbers (handle nulls, empty strings, etc.)
         clean_flight = df[fn_col].astype(str).str.strip().str.upper()
 
+        # Create valid mask - exclude null/empty/NA values
         valid_mask = (
             df[fn_col].notna()
             & df[ap_from].notna()
@@ -234,38 +236,56 @@ class ChunkProcessor:
             & (clean_flight != "")
             & (clean_flight != "NAN")
             & (clean_flight != "NONE")
+            & (clean_flight != "N/A")
         )
 
         sub = df.loc[valid_mask].copy()
         if sub.empty:
             return None
 
-        dates = pd.to_datetime(sub[fd_col], errors="coerce")
-        valid_date_mask = dates.notna()
-        sub = sub.loc[valid_date_mask]
-        dates = dates[valid_date_mask]
-        clean_flight = clean_flight[valid_mask]
+        # Parse dates - your dates might already be in proper format
+        # Try to convert to datetime, if it fails, keep as string
+        try:
+            dates = pd.to_datetime(sub[fd_col], errors="coerce")
+            valid_date_mask = dates.notna()
+            sub = sub.loc[valid_date_mask]
+            dates = dates[valid_date_mask]
+            if sub.empty:
+                return None
+        except:
+            # If date conversion fails, use as-is (might already be datetime)
+            dates = sub[fd_col]
 
-        if sub.empty:
-            return None
-
+        # Create the leg dataframe
         return pd.DataFrame(
             {
                 "_uid": sub["_uid"].values,
                 "LegNo": leg_num,
-                "FlightNumber": clean_flight.values,
-                "DepartureDate": dates.values,
+                "FlightNumber": clean_flight.loc[valid_mask].values
+                if len(valid_mask) == len(clean_flight)
+                else clean_flight.values,
+                "DepartureDate": dates.values
+                if isinstance(dates, pd.Series)
+                else dates,
                 "FromAirport": sub[ap_from].astype(str).str.strip().str.upper().values,
                 "ToAirport": sub[ap_to].astype(str).str.strip().str.upper().values,
-                "AirlineCodes": sub["AirlineCodes"]
+                "AirlineCode": sub["AirlineCode"]
                 .astype(str)
                 .str.strip()
                 .str.upper()
                 .values,
                 "PaxName": sub["PaxName"].fillna("").astype(str).str.strip().values,
-                "ETicketNo": sub["TDNR"].fillna("").astype(str).str.strip().values,
-                "BookingRef": sub["PNRR"].fillna("").astype(str).str.strip().values,
-                "FileName": sub["_SourceFile"]
+                "ETicketNo": sub["ETicketNo"]
+                .fillna("")
+                .astype(str)
+                .str.strip()
+                .values,  # Changed from TDNR to ETicketNo
+                "BookingRef": sub["BookingRef"]
+                .fillna("")
+                .astype(str)
+                .str.strip()
+                .values,  # Changed from PNRR to BookingRef
+                "FileName": sub.get("_SourceFile", pd.Series([""] * len(sub)))
                 .fillna("")
                 .astype(str)
                 .str.strip()
@@ -300,7 +320,7 @@ class ChunkProcessor:
         is_domestic_tr = df["_uid"].map(domestic_tr_journeys).fillna(False).astype(bool)
 
         # --- RULE 1: UK Carrier + UK Airport on ANY leg → entire journey eligible ---
-        is_uk_carrier = df["AirlineCodes"].isin(UK_CARRIERS)
+        is_uk_carrier = df["AirlineCode"].isin(UK_CARRIERS)
         touches_uk = df["FromAirport"].isin(self.uk_airports) | df["ToAirport"].isin(
             self.uk_airports
         )
@@ -308,7 +328,7 @@ class ChunkProcessor:
         uk_journey_eligible = uk_eligible_legs.groupby(df["_uid"], sort=False).any()
 
         # --- RULE 2: TR Carrier + TR Airport on ANY leg → entire journey eligible ---
-        is_tr_carrier = df["AirlineCodes"].isin(TR_CARRIERS)
+        is_tr_carrier = df["AirlineCode"].isin(TR_CARRIERS)
         touches_tr = df["FromAirport"].isin(self.tr_airports) | df["ToAirport"].isin(
             self.tr_airports
         )
@@ -316,7 +336,7 @@ class ChunkProcessor:
         tr_journey_eligible = tr_eligible_legs.groupby(df["_uid"], sort=False).any()
 
         # --- RULE 3: SRB Carrier + SRB Airport on ANY leg → entire journey eligible ---
-        is_srb_carrier = df["AirlineCodes"].isin(SRB_CARRIERS)
+        is_srb_carrier = df["AirlineCode"].isin(SRB_CARRIERS)
         touches_srb = df["FromAirport"].isin(SRB_AIRPORTS) | df["ToAirport"].isin(
             SRB_AIRPORTS
         )
@@ -326,8 +346,8 @@ class ChunkProcessor:
         # EU261 logic
         eu_dep = df["FromAirport"].isin(self.eu_airports)
         eu_arr = df["ToAirport"].isin(self.eu_airports)
-        eu_carrier = df["AirlineCodes"].isin(self.eu_carriers)
-        is_special = df["AirlineCodes"].isin(SPECIAL_NON_EU_CARRIERS)
+        eu_carrier = df["AirlineCode"].isin(self.eu_carriers)
+        is_special = df["AirlineCode"].isin(SPECIAL_NON_EU_CARRIERS)
 
         # Inbound: non-EU departure, EU arrival, with EU or special carrier
         inbound_ok = (~eu_dep) & eu_arr & (eu_carrier | is_special)
