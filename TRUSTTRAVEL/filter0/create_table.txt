@@ -1,0 +1,31 @@
+--Remove "  /  /    " from FlightDate2 and FlightDate4 before create table
+CREATE TABLE TRUSTTRAVEL AS
+SELECT *
+FROM read_csv(
+    'C:/Users/cagri/Desktop/Agency_Data/TrustTravel/filter-0/TRUST TICKET DETAILS APR 2025 TO MAY 2026.csv',
+    header = true,
+    delim = ',',
+    auto_detect = false,
+    columns = {
+        'BillDate': 'VARCHAR',
+        'PNRNo': 'VARCHAR',
+        'AirlineName': 'VARCHAR',        
+        'TicketNo': 'VARCHAR',
+        'FlightNo1': 'VARCHAR',
+        'FlightNo2': 'VARCHAR',
+        'FlightNo3': 'VARCHAR',
+        'FlightNo4': 'VARCHAR',
+        'FlightDate1': 'DATE',
+        'FlightDate2': 'DATE',
+        'FlightDate3': 'DATE',
+        'FlightDate4': 'DATE',
+        'PaxName': 'VARCHAR',
+        'Airport1': 'VARCHAR',
+        'Airport2': 'VARCHAR',
+        'Airport3': 'VARCHAR',
+        'Airport4': 'VARCHAR',
+        'Airport5': 'VARCHAR'
+    },
+    dateformat = '%m/%d/%Y',
+    nullstr = ''
+);
