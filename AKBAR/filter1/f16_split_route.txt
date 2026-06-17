@@ -108,3 +108,45 @@ WHERE Airport2 = Airport5 AND ParentId IS NULL;
 
 DELETE FROM AKBAR_CLEANED_V2
 WHERE Airport2 = Airport5 AND ParentId IS NULL;
+
+----------------------------------------------------------------------
+--------------------------------------------------------------------
+
+-- Use a transaction block to ensure data is not lost if the delete fails or inserts fail
+BEGIN TRANSACTION;
+
+-- 1. Insert first split row (Leg 1)
+INSERT INTO OBILET_SPLIT4
+    (Id, PaxName, BookingRef, Airline, AirlineCode, ETicketNo, 
+     FlightNumber1,   
+     DepartureDateLocal1,  
+     AirportIataCode1, AirportIataCode2, 
+     ParentId)
+VALUES 
+    (gen_random_uuid(), 
+     'MARCELOALBERTO RIUDAVETSSLANGEN', 'BRKHJ0', 'Emirates', 'EK', '1.76E+12',
+     'EK2190',
+     '2025-03-25',  
+     'DXB', 'DAR', 
+     '779f86c9-8bb5-4755-955b-ccb82bb46416');
+
+-- 2. Insert second split row (Leg 2 and Leg 3)
+INSERT INTO OBILET_SPLIT4
+    (Id, PaxName, BookingRef, Airline, AirlineCode, ETicketNo, 
+     FlightNumber1, FlightNumber2,
+     DepartureDateLocal1, DepartureDateLocal2, -- Added missing comma
+     AirportIataCode1, AirportIataCode2, AirportIataCode3, -- Added missing column for 'MAD'
+     ParentId)
+VALUES 
+    (gen_random_uuid(), 
+     'MARCELOALBERTO RIUDAVETSSLANGEN', 'BRKHJ0', 'Emirates', 'EK', '1.76E+12',
+     'EK2191', 'EK141',
+     '2025-03-26', '2025-03-27', -- Added missing comma
+     'DAR', 'DXB', 'MAD', -- Now aligns perfectly with 3 airport columns
+     '779f86c9-8bb5-4755-955b-ccb82bb46416');
+
+-- 3. Remove original row
+DELETE FROM OBILET_SPLIT4 
+WHERE Id = '779f86c9-8bb5-4755-955b-ccb82bb46416';
+
+COMMIT TRANSACTION;
