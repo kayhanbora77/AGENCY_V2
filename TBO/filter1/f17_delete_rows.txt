@@ -1,0 +1,2 @@
+delete from tbo_split6 where FlightNumber4 is not null
+
