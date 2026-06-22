@@ -122,6 +122,17 @@ _DATE_FMTS = [
 ]
 
 
+def _fix_row_flightnos(row: dict) -> dict:
+    """Apply scientific-notation fix to all FlightNumber slots, in place semantics."""
+    row = dict(row)
+    for i in range(1, MAX_FLIGHTS + 1):
+        fn = row.get(f"FlightNumber{i}")
+        if not _isna(fn):
+            fixed = _fix_scientific_notation(str(fn).strip())
+            row[f"FlightNumber{i}"] = fixed
+    return row
+
+
 def _fix_scientific_notation(fn: str) -> str:
     """Collapse Excel-mangled scientific notation, e.g. '6.00E+78' -> '6E78'."""
     m = _RE_SCI_NOTATION.fullmatch(fn.strip())
@@ -132,13 +143,18 @@ def _fix_scientific_notation(fn: str) -> str:
 
 
 def _isna(val) -> bool:
-    """True if val is None, NaN, or blank-after-strip."""
+    """True if val is None, NaN, NaT, or blank-after-strip."""
     if val is None:
         return True
-    if isinstance(val, float) and math.isnan(val):
-        return True
-    if isinstance(val, str) and val.strip() == "":
-        return True
+    if isinstance(val, str):
+        return val.strip() == ""
+    try:
+        result = pd.isna(val)
+    except (TypeError, ValueError):
+        return False
+    # pd.isna can return an array for list-like input; only trust scalar bools
+    if isinstance(result, bool):
+        return result
     return False
 
 
@@ -203,7 +219,6 @@ def is_valid_flightno(fn, dt):
     if not fn:
         return False, Reason.FN_EMPTY, f"fn={fn!r}"
 
-    fn = _fix_scientific_notation(fn)
     if fn.isdigit():
         return False, Reason.FN_PURELY_NUMERIC, f"fn={fn!r}"
 
@@ -401,19 +416,11 @@ def ensure_rejection_table(con, source_cols: list[str], rejection_table: str):
 
 
 def ensure_target_table(con, source_cols: list[str], target_table: str):
-    """Create target table only if it doesn't exist."""
-    exists = con.execute(f"""
-        SELECT COUNT(*) FROM information_schema.tables 
-        WHERE table_name = '{target_table}'
-    """).fetchone()[0]
-
-    if exists:
-        print(f"  Target table '{target_table}' already exists.")
-        return
-
+    """Drop and recreate target table fresh on every run."""
+    con.execute(f'DROP TABLE IF EXISTS "{target_table}"')
     col_defs = ", ".join(f'"{_sanitize_col(c)}" VARCHAR' for c in source_cols)
     con.execute(f'CREATE TABLE "{target_table}" ({col_defs})')
-    print(f"  Created {target_table}.")
+    print(f"  Dropped and recreated {target_table}.")
 
 
 # ============================================================================
@@ -469,6 +476,8 @@ def process_batch(batch_df: pd.DataFrame, seen_keys: set):
     reject_indices: set[int] = set()
 
     for idx, row in enumerate(records):
+        row = _fix_row_flightnos(row)
+        records[idx] = row
         for check_fn in _CHECKS:
             rejected, reason = check_fn(row)
             if rejected:
