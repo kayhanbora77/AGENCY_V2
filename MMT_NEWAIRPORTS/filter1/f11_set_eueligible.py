@@ -295,7 +295,6 @@ class ChunkProcessor:
             df[col] = val
 
         # --- STEP 2: Calculate IsSingleFlight using the finalized ConnectionID values ---
-        # This mirrors the exact structure going into the final TA_STANDARD_MMT schema
         journey_leg_count = df.groupby("ConnectionID")["ConnectionID"].transform("size")
         df["IsSingleFlight"] = journey_leg_count == 1
 

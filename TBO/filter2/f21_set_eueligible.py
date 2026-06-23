@@ -138,7 +138,9 @@ class ReferenceData:
 
     @staticmethod
     def _load_airport_tz(con) -> dict:
-        rows = con.execute("SELECT CodeIataAirport, timezone FROM AIRPORTS").fetchall()
+        rows = con.execute(
+            "SELECT iata, timezone FROM AIRPORTS_ALL WHERE iata IS NOT NULL AND timezone IS NOT NULL"
+        ).fetchall()
         return {code.strip().upper(): tz for code, tz in rows if code and tz}
 
     @staticmethod
@@ -253,7 +255,10 @@ class ChunkProcessor:
         }
         for col, val in placeholders.items():
             all_legs[col] = val
-
+        journey_leg_count = all_legs.groupby("ConnectionID")["ConnectionID"].transform(
+            "size"
+        )
+        all_legs["IsSingleFlight"] = journey_leg_count == 1
         return all_legs[self._target_cols].reset_index(drop=True)
 
     def _extract_leg(self, df: pd.DataFrame, leg_num: int) -> Optional[pd.DataFrame]:
