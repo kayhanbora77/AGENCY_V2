@@ -13,7 +13,7 @@ import pandas as pd
 # ============================================================================
 
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
-SOURCE_TABLE = "THOMASCOOK_SPLIT3"
+SOURCE_TABLE = "THOMASCOOK_SPLIT5"
 TARGET_TABLE = "THOMASCOOK_CLEANED"
 REJECTION_TABLE = "THOMASCOOK_REJECTION"
 

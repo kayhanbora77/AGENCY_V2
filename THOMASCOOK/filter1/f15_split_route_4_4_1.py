@@ -10,8 +10,8 @@ import math
 # ============================================================================
 # ALTER TABLE THOMASCOOK_CLEANED RENAME TO THOMASCOOK_SPLIT4;
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
-SOURCE_TABLE = "THOMASCOOK_SPLIT4"
-TARGET_TABLE = "THOMASCOOK_SPLIT5"
+SOURCE_TABLE = "THOMASCOOK_SPLIT3"
+TARGET_TABLE = "THOMASCOOK_SPLIT4"
 
 MAX_FLIGHTS = 9
 MAX_DATES = 9
@@ -45,15 +45,20 @@ COL_IDX: dict = {}
 
 def is_blank(val):
     """
-    Returns True if val is None, NaN, empty string, or whitespace-only string.
-    Handles pandas NaN (float), regular None, and string edge cases.
+    Returns True if val is None, NaN, NaT, empty string, or whitespace-only string.
     """
     if val is None:
         return True
-    if isinstance(val, float) and math.isnan(val):
-        return True
     if isinstance(val, str) and val.strip() == "":
         return True
+
+    # pd.isna() correctly identifies pandas NaT, numpy NaN, etc.
+    try:
+        if pd.isna(val):
+            return True
+    except Exception:
+        pass
+
     return False
 
 
