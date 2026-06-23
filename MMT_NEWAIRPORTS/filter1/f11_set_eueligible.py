@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from zoneinfo import ZoneInfo
 from datetime import datetime, time
+import re
 
 
 # ==================================================
@@ -33,6 +34,7 @@ TR_CARRIERS = frozenset({"TK", "PC", "FH", "XQ", "VF"})
 UK_CARRIERS = frozenset({"BA", "VS"})
 SRB_CARRIERS = frozenset({"JU"})
 SRB_AIRPORTS = frozenset({"BEG", "INI", "KVO"})
+_RE_SCI_NOTATION = re.compile(r"^(\d+)(?:\.0+)?E\+?(\d+)$", re.IGNORECASE)
 
 TARGET_COLUMNS = [
     "ConnectionID",
@@ -75,6 +77,15 @@ logger = logging.getLogger(__name__)
 
 Path(CONFIG.db_path).parent.mkdir(parents=True, exist_ok=True)
 Path(CONFIG.temp_dir).mkdir(parents=True, exist_ok=True)
+
+
+def _fix_scientific_notation(fn: str) -> str:
+    """Collapse Excel-mangled scientific notation, e.g. '6.00E+78' -> '6E78'."""
+    m = _RE_SCI_NOTATION.fullmatch(fn.strip())
+    if not m:
+        return fn
+    mantissa, exponent = m.group(1), m.group(2)
+    return f"{mantissa}E{exponent}"
 
 
 # ==================================================
@@ -212,7 +223,8 @@ class ChunkProcessor:
         df = df.copy()
 
         # Clean flight number / required fields, drop invalid rows
-        clean_flight = df["FlightNumber"].astype(str).str.strip().str.upper()
+        clean_flight = df["FlightNumber"].apply(_fix_scientific_notation)
+        clean_flight = clean_flight.astype(str).str.strip().str.upper()
         valid_mask = (
             df["FlightNumber"].notna()
             & df["NewDepAirport"].notna()
