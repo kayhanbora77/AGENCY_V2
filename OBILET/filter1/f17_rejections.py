@@ -84,6 +84,7 @@ class Reason(str, Enum):
 _RE_FLTNO = re.compile(r"^(?:[A-Z]{3}|[A-Z0-9]{2})\d+$")
 _RE_AIRLINECODE_23 = re.compile(r"^[A-Za-z0-9]{2,3}$")
 _RE_AIRPORT_3 = re.compile(r"^[A-Za-z]{3}$")
+_RE_SCI_NOTATION = re.compile(r"^(\d+)(?:\.0+)?E\+?(\d+)$", re.IGNORECASE)
 
 _DATE_FMTS = [
     "%Y-%m-%d %H:%M:%S",
@@ -141,6 +142,26 @@ def _parse_date(dt_str):
             return pd.to_datetime(s, dayfirst=False).to_pydatetime()
     except Exception:
         return None
+
+
+def _fix_row_flightnos(row: dict) -> dict:
+    """Apply scientific-notation fix to all FlightNumber slots, in place semantics."""
+    row = dict(row)
+    for i in range(1, MAX_FLIGHTS + 1):
+        fn = row.get(f"FlightNumber{i}")
+        if not _isna(fn):
+            fixed = _fix_scientific_notation(str(fn).strip())
+            row[f"FlightNumber{i}"] = fixed
+    return row
+
+
+def _fix_scientific_notation(fn: str) -> str:
+    """Collapse Excel-mangled scientific notation, e.g. '6.00E+78' -> '6E78'."""
+    m = _RE_SCI_NOTATION.fullmatch(fn.strip())
+    if not m:
+        return fn
+    mantissa, exponent = m.group(1), m.group(2)
+    return f"{mantissa}E{exponent}"
 
 
 # ============================================================================
@@ -305,6 +326,8 @@ def process_batch(
     reject_rows, reject_reasons, reject_indices = [], [], set()
 
     for idx, row in enumerate(records):
+        row = _fix_row_flightnos(row)
+        records[idx] = row
         for check_fn in _CHECKS:
             rejected, reason = check_fn(row)
             if rejected:
