@@ -1,0 +1,22 @@
+COPY (
+    SELECT
+        Id, ConnectionID, PaxName, AgencyRefNumber, ETicketNo, FlightNumber,
+        DepartureDate, FileName, BookingRef, AirlineCode, FromAirport, ToAirport,
+        LastLegAirport,GMTDeparture,GMTArrival,
+        CASE WHEN EUEligible THEN 1 ELSE 0 END AS EUEligible,
+        EUEligibleDuration, ExtraNote,
+        CASE WHEN FlightFound THEN 1 ELSE 0 END AS FlightFound, LegNo,
+        CASE WHEN IsTimeLimitL1 THEN 1 ELSE 0 END AS IsTimeLimitL1,
+        CASE WHEN IsTimeLimitL2 THEN 1 ELSE 0 END AS IsTimeLimitL2,
+        EUFlights_Id, Link_Id, DelayInSecond, Status,
+        CASE WHEN IsSingleFlight THEN 1 ELSE 0 END AS IsSingleFlight,
+        CASE WHEN IsCanEligible THEN 1 ELSE 0 END AS IsCanEligible
+    FROM TA_STANDARD_MMT
+)
+TO 'C:/Users/cagri/Desktop/MMT/TA_STANDARD_MMT.csv'
+WITH (
+    HEADER true,
+    DELIMITER ',',
+    NULL '',       -- <--- CHANGE THIS: Export NULLs as empty fields
+    QUOTE '"'
+);

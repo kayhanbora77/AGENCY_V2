@@ -63,6 +63,7 @@ TARGET_COLUMNS = [
     "DelayInSecond",
     "Status",
     "IsSingleFlight",
+    "IsAirportProblem",
 ]
 
 # ==================================================
@@ -182,8 +183,8 @@ class ChunkProcessor:
         "eu_carriers",
         "tr_airports",
         "uk_airports",
-        "_target_cols",
         "airport_tz",
+        "_target_cols",
     )
 
     def __init__(
@@ -213,7 +214,6 @@ class ChunkProcessor:
             result.loc[mask] = [
                 ReferenceData.calc_gmt_offset(tz_name, d) for d in dates.loc[mask]
             ]
-
         return result
 
     def process(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -222,9 +222,11 @@ class ChunkProcessor:
 
         df = df.copy()
 
-        # Clean flight number / required fields, drop invalid rows
+        # Clean flight number
         clean_flight = df["FlightNumber"].apply(_fix_scientific_notation)
         clean_flight = clean_flight.astype(str).str.strip().str.upper()
+
+        # Validate required fields
         valid_mask = (
             df["FlightNumber"].notna()
             & df["NewDepAirport"].notna()
@@ -239,48 +241,49 @@ class ChunkProcessor:
         if df.empty:
             return pd.DataFrame(columns=self._target_cols)
 
-        df["FlightNumber_clean"] = clean_flight.loc[valid_mask]
-        df["FromAirport"] = df["NewDepAirport"].astype(str).str.strip().str.upper()
-        df["ToAirport"] = df["NewArrAirport"].astype(str).str.strip().str.upper()
-        df["AirlineCode"] = df["Airline"].astype(str).str.strip().str.upper()
+        # Parse dates
         df["DepartureDate_parsed"] = pd.to_datetime(
             df["DepartureDate"], errors="coerce"
         )
-
         df = df.loc[df["DepartureDate_parsed"].notna()].copy()
         if df.empty:
             return pd.DataFrame(columns=self._target_cols)
 
-        # GMT offsets — vectorized per row, grouped by departure/arrival airport
+        # Map columns to target format
+        df["FlightNumber"] = clean_flight.loc[valid_mask].values
+        df["FromAirport"] = df["NewDepAirport"].astype(str).str.strip().str.upper()
+        df["ToAirport"] = df["NewArrAirport"].astype(str).str.strip().str.upper()
+        df["AirlineCode"] = df["Airline"].astype(str).str.strip().str.upper()
+        df["DepartureDate"] = df["DepartureDate_parsed"]
+
+        # GMT offsets
         df["GMTDeparture"] = self._gmt_offsets_vectorized(
-            df["FromAirport"], df["DepartureDate_parsed"]
+            df["FromAirport"], df["DepartureDate"]
         ).values
         df["GMTArrival"] = self._gmt_offsets_vectorized(
-            df["ToAirport"], df["DepartureDate_parsed"]
+            df["ToAirport"], df["DepartureDate"]
         ).values
 
-        # --- STEP 1: Set ConnectionID exactly as it will appear in TA_STANDARD_MMT ---
+        # ConnectionID: use existing or generate new
         df["ConnectionID"] = df["ConnectionId"].copy()
         single_mask = df["ConnectionID"].isna()
         df.loc[single_mask, "ConnectionID"] = [
             str(uuid.uuid4()) for _ in range(single_mask.sum())
         ]
 
-        # Unique _uid for grouping: use ConnectionId where available
-        df["_uid"] = df["ConnectionID"]
-
         # Last leg airport per journey
         last_airports = (
             df.sort_values("LegNo", kind="mergesort")
-            .groupby("_uid", sort=False)["ToAirport"]
+            .groupby("ConnectionID", sort=False)["ToAirport"]
             .last()
             .rename("LastLegAirport")
         )
-        df = df.join(last_airports, on="_uid")
+        df = df.join(last_airports, on="ConnectionID")
 
+        # EU Eligibility
         df["EUEligible"] = self._vectorized_eligibility(df)
-        df["FlightNumber"] = df["FlightNumber_clean"]
-        df["DepartureDate"] = df["DepartureDate_parsed"]
+
+        # Fill remaining columns
         df["ETicketNo"] = ""
         df["BookingRef"] = df["BookingId"].fillna("").astype(str).str.strip()
         df["PaxName"] = ""
@@ -291,7 +294,21 @@ class ChunkProcessor:
             .str.strip()
         )
 
-        placeholders = {
+        # IsSingleFlight: journeys with only 1 leg
+        journey_leg_count = df.groupby("ConnectionID")["ConnectionID"].transform("size")
+        df["IsSingleFlight"] = journey_leg_count == 1
+
+        # IsAirportProblem
+        if "IsAirportProblem" in df.columns:
+            df["IsAirportProblem"] = (
+                df["IsAirportProblem"].fillna(False).astype(str).str.strip().str.title()
+                == "True"
+            )
+        else:
+            df["IsAirportProblem"] = False
+
+        # Placeholders
+        for col, val in {
             "AgencyRefNumber": None,
             "EUEligibleDuration": 0,
             "ExtraNote": None,
@@ -302,180 +319,80 @@ class ChunkProcessor:
             "Link_Id": None,
             "DelayInSecond": None,
             "Status": None,
-        }
-        for col, val in placeholders.items():
+        }.items():
             df[col] = val
-
-        # --- STEP 2: Calculate IsSingleFlight using the finalized ConnectionID values ---
-        journey_leg_count = df.groupby("ConnectionID")["ConnectionID"].transform("size")
-        df["IsSingleFlight"] = journey_leg_count == 1
 
         return df[self._target_cols].reset_index(drop=True)
 
-    def _extract_leg(self, df: pd.DataFrame, leg_num: int) -> Optional[pd.DataFrame]:
-        # Map your actual column names
-        fn_col = f"FlightNumber{leg_num}"
-        fd_col = f"DepartureDate{leg_num}"
-        ap_from = f"NewDepAirport{leg_num}"
-        ap_to = f"NewArrAirport{leg_num}"
-
-        # Check if columns exist (you have up to 6 flights)
-        if fn_col not in df.columns or fd_col not in df.columns:
-            return None
-
-        # Clean flight numbers (handle nulls, empty strings, etc.)
-        clean_flight = df[fn_col].astype(str).str.strip().str.upper()
-
-        # Create valid mask - exclude null/empty/NA values
-        valid_mask = (
-            df[fn_col].notna()
-            & df[ap_from].notna()
-            & df[ap_to].notna()
-            & (clean_flight != "")
-            & (clean_flight != "NAN")
-            & (clean_flight != "NONE")
-            & (clean_flight != "N/A")
-        )
-
-        sub = df.loc[valid_mask].copy()
-        clean_flight = clean_flight.loc[valid_mask]
-        if sub.empty:
-            return None
-
-        try:
-            dates = pd.to_datetime(sub[fd_col], errors="coerce")
-            valid_date_mask = dates.notna()
-            sub = sub.loc[valid_date_mask].reset_index(drop=True)
-            dates = dates[valid_date_mask].reset_index(drop=True)
-            clean_flight = clean_flight.loc[valid_date_mask].reset_index(drop=True)
-            if sub.empty:
-                return None
-        except Exception:
-            dates = sub[fd_col]
-
-        # Create the leg dataframe
-        return pd.DataFrame(
-            {
-                "_uid": sub["_uid"].values,
-                "Id": sub["Id"].values,
-                "LegNo": leg_num,
-                "FlightNumber": clean_flight.values,
-                "DepartureDate": dates.values,
-                "FromAirport": sub[ap_from].astype(str).str.strip().str.upper().values,
-                "ToAirport": sub[ap_to].astype(str).str.strip().str.upper().values,
-                "GMTDeparture": self._gmt_offsets_vectorized(
-                    sub[ap_from].astype(str).str.strip().str.upper(), dates
-                ).values,
-                "GMTArrival": self._gmt_offsets_vectorized(
-                    sub[ap_to].astype(str).str.strip().str.upper(), dates
-                ).values,
-                "AirlineCode": sub["Airline"]
-                .astype(str)
-                .str.strip()
-                .str.upper()
-                .values,
-                "PaxName": sub["PaxName"].fillna("").astype(str).str.strip().values,
-                "ETicketNo": sub["ETicketNo"]
-                .fillna("")
-                .astype(str)
-                .str.strip()
-                .values,  # Changed from TDNR to ETicketNo
-                "BookingRef": sub["BookingRef"]
-                .fillna("")
-                .astype(str)
-                .str.strip()
-                .values,  # Changed from PNRR to BookingRef
-                "FileName": sub.get("_SourceFile", pd.Series([""] * len(sub)))
-                .fillna("")
-                .astype(str)
-                .str.strip()
-                .values,
-            }
-        )
+    # NOTE: _extract_leg() DELETED - not needed for LONG format data
 
     def _vectorized_eligibility(self, df: pd.DataFrame) -> pd.Series:
-        """
-        Check every leg's airline carrier:
-        1. Domestic TR flights (First and Last airport in TR) are NEVER eligible.
-        2. If carrier is UK and FromAirport or ToAirport is UK → ALL legs with same _uid are Eligible
-        3. If carrier is TR and FromAirport or ToAirport is TR → ALL legs with same _uid are Eligible
-        4. If carrier is SRB and FromAirport or ToAirport is SRB → ALL legs with same _uid are Eligible
-        5. Otherwise apply EU261 rules
-        """
+        # ... (same as before, but use "ConnectionID" instead of "_uid")
         if df.empty:
             return pd.Series(dtype=bool)
 
-        # --- NEW RULE: Domestic TR flights (First and Last airport in TR) are NOT eligible ---
-        # Turkey does not pay compensation for these flights
-        sorted_legs = df.sort_values("LegNo", kind="mergesort")
-        first_airports = sorted_legs.groupby("_uid", sort=False)["FromAirport"].first()
-        last_airports = sorted_legs.groupby("_uid", sort=False)["ToAirport"].last()
+        # Use ConnectionID for grouping (not _uid)
+        uid_col = "ConnectionID"
 
-        # Check if both the start and end of the journey are in Turkey
+        sorted_legs = df.sort_values("LegNo", kind="mergesort")
+        first_airports = sorted_legs.groupby(uid_col, sort=False)["FromAirport"].first()
+        last_airports = sorted_legs.groupby(uid_col, sort=False)["ToAirport"].last()
+
         domestic_tr_journeys = first_airports.isin(
             self.tr_airports
         ) & last_airports.isin(self.tr_airports)
+        is_domestic_tr = (
+            df[uid_col].map(domestic_tr_journeys).fillna(False).astype(bool)
+        )
 
-        # Map this boolean flag back to every row in the chunk
-        is_domestic_tr = df["_uid"].map(domestic_tr_journeys).fillna(False).astype(bool)
-
-        # --- RULE 1: UK Carrier + UK Airport on ANY leg → entire journey eligible ---
         is_uk_carrier = df["AirlineCode"].isin(UK_CARRIERS)
         touches_uk = df["FromAirport"].isin(self.uk_airports) | df["ToAirport"].isin(
             self.uk_airports
         )
         uk_eligible_legs = is_uk_carrier & touches_uk
-        uk_journey_eligible = uk_eligible_legs.groupby(df["_uid"], sort=False).any()
+        uk_journey_eligible = uk_eligible_legs.groupby(df[uid_col], sort=False).any()
 
-        # --- RULE 2: TR Carrier + TR Airport on ANY leg → entire journey eligible ---
         is_tr_carrier = df["AirlineCode"].isin(TR_CARRIERS)
         touches_tr = df["FromAirport"].isin(self.tr_airports) | df["ToAirport"].isin(
             self.tr_airports
         )
         tr_eligible_legs = is_tr_carrier & touches_tr & ~is_domestic_tr
-        tr_journey_eligible = tr_eligible_legs.groupby(df["_uid"], sort=False).any()
+        tr_journey_eligible = tr_eligible_legs.groupby(df[uid_col], sort=False).any()
 
-        # --- RULE 3: SRB Carrier + SRB Airport on ANY leg → entire journey eligible ---
         is_srb_carrier = df["AirlineCode"].isin(SRB_CARRIERS)
         touches_srb = df["FromAirport"].isin(SRB_AIRPORTS) | df["ToAirport"].isin(
             SRB_AIRPORTS
         )
         srb_eligible_legs = is_srb_carrier & touches_srb
-        srb_journey_eligible = srb_eligible_legs.groupby(df["_uid"], sort=False).any()
+        srb_journey_eligible = srb_eligible_legs.groupby(df[uid_col], sort=False).any()
 
-        # EU261 logic
         eu_dep = df["FromAirport"].isin(self.eu_airports)
         eu_arr = df["ToAirport"].isin(self.eu_airports)
         eu_carrier = df["AirlineCode"].isin(self.eu_carriers)
         is_special = df["AirlineCode"].isin(SPECIAL_NON_EU_CARRIERS)
-
-        # Inbound: non-EU departure, EU arrival, with EU or special carrier
         inbound_ok = (~eu_dep) & eu_arr & (eu_carrier | is_special)
 
-        # Journey-level aggregation for EU261
         journey_df = pd.DataFrame(
             {
-                "_uid": df["_uid"],
+                uid_col: df[uid_col],
                 "eu_dep": eu_dep,
                 "eu_arr": eu_arr,
                 "inbound_ok": inbound_ok,
             }
         )
 
-        journey_agg = journey_df.groupby("_uid", sort=False).agg(
+        journey_agg = journey_df.groupby(uid_col, sort=False).agg(
             first_eu_dep=("eu_dep", "first"),
             last_eu_arr=("eu_arr", "last"),
             any_inbound_ok=("inbound_ok", "any"),
         )
 
-        # EU261: departure from EU, OR (non-EU departure + EU arrival + inbound_ok)
         eu_journey_eligible = journey_agg["first_eu_dep"] | (
             ~journey_agg["first_eu_dep"]
             & journey_agg["last_eu_arr"]
             & journey_agg["any_inbound_ok"]
         )
 
-        # Combine all rules — FIX: include srb_journey_eligible!
         all_eligible = (
             uk_journey_eligible
             | tr_journey_eligible
@@ -483,11 +400,7 @@ class ChunkProcessor:
             | eu_journey_eligible
         )
 
-        # Map the combined eligibility back to each row
-        eligible_mapped = df["_uid"].map(all_eligible).fillna(False).astype(bool)
-
-        # --- APPLY OVERRIDE ---
-        # If a journey is classified as domestic TR, force it to False regardless of other rules
+        eligible_mapped = df[uid_col].map(all_eligible).fillna(False).astype(bool)
         return eligible_mapped & (~is_domestic_tr)
 
 
@@ -533,7 +446,8 @@ class CreateTAStandardTable:
                 EUEligible BOOLEAN, EUEligibleDuration INTEGER, ExtraNote VARCHAR, 
                 FlightFound BOOLEAN, LegNo INTEGER, IsTimeLimitL1 BOOLEAN, 
                 IsTimeLimitL2 BOOLEAN, EUFlights_Id VARCHAR, Link_Id VARCHAR, 
-                DelayInSecond INTEGER, Status VARCHAR, IsSingleFlight BOOLEAN
+                DelayInSecond INTEGER, Status VARCHAR, IsSingleFlight BOOLEAN,
+                IsAirportProblem BOOLEAN,
             )
         """)
         logger.info(f"Created target table: {self.config.target_table}")
