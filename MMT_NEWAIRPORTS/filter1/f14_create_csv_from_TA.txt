@@ -10,7 +10,8 @@ COPY (
         CASE WHEN IsTimeLimitL2 THEN 1 ELSE 0 END AS IsTimeLimitL2,
         EUFlights_Id, Link_Id, DelayInSecond, Status,
         CASE WHEN IsSingleFlight THEN 1 ELSE 0 END AS IsSingleFlight,
-        CASE WHEN IsCanEligible THEN 1 ELSE 0 END AS IsCanEligible
+        CASE WHEN IsCanEligible THEN 1 ELSE 0 END AS IsCanEligible,
+        CASE WHEN IsAirportProblem THEN 1 ELSE 0 END AS IsAirportProblem
     FROM TA_STANDARD_MMT
 )
 TO 'C:/Users/cagri/Desktop/MMT/TA_STANDARD_MMT.csv'
