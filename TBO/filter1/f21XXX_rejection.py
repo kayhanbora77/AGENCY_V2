@@ -35,7 +35,7 @@ import pandas as pd
 # ============================================================================
 
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
-SOURCE_TABLE = "TBO_SPLIT8"  # input  table (read-only)
+SOURCE_TABLE = "TBO_SPLIT9"  # input  table (read-only)
 TARGET_TABLE = "TBO_CLEANED"  # output table for clean / passing rows
 REJECTION_TABLE = "TBO_REJECTION"  # output table for rejected rows
 

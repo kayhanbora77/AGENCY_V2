@@ -2,9 +2,37 @@ import duckdb
 import pandas as pd
 from typing import Set, Dict, List
 
-
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
 SOURCE_TABLE = "TA_STANDARD_MMT"
+SPECIAL_NON_EU_CARRIERS = frozenset({"BA", "TK", "PC", "JU", "FH", "VF", "VS", "XQ"})
+
+
+def is_eu_airport(airport, eu_airports: Set[str]) -> bool:
+    """Check if an airport code is an EU airport."""
+    if airport is None:
+        return False
+    try:
+        if pd.isna(airport):
+            return False
+    except (TypeError, ValueError):
+        pass
+    return str(airport).strip().upper() in eu_airports
+
+
+def is_non_eu_carrier(carrier, eu_carriers: Set[str]) -> bool:
+    """Check if a carrier code is a NON-EU carrier."""
+    if carrier is None:
+        return False
+    try:
+        if pd.isna(carrier):
+            return False
+    except (TypeError, ValueError):
+        pass
+    # If it is NOT in the EU carriers set, it is a non-EU carrier
+    return (
+        str(carrier).strip().upper() not in eu_carriers
+        and str(carrier).strip().upper() not in SPECIAL_NON_EU_CARRIERS
+    )
 
 
 def is_canada_airport(airport, canada_airports: Set[str]) -> bool:
@@ -16,40 +44,70 @@ def is_canada_airport(airport, canada_airports: Set[str]) -> bool:
             return False
     except (TypeError, ValueError):
         pass
-    if isinstance(airport, str) and airport.strip() == "":
-        return False
     return str(airport).strip().upper() in canada_airports
 
 
 def load_canada_airports(conn) -> Set[str]:
-    """Load Canadian airport codes into a frozenset for O(1) lookup."""
+    """Load Canadian airport codes."""
     rows = conn.execute(
         "SELECT iata FROM AIRPORTS_ALL WHERE upper(COUNTRY) = upper('Canada')"
     ).fetchall()
     return frozenset(str(r[0]).strip().upper() for r in rows if r and r[0] is not None)
 
 
+def load_eu_airports(con) -> frozenset:
+    """Load EU airport codes."""
+    rows = con.execute("""
+        SELECT CodeIataAirport 
+        FROM AIRPORTS 
+        WHERE CodeIso2Country NOT IN ('TR','MA')
+    """).fetchall()
+    return frozenset(r[0].strip().upper() for r in rows if r and r[0])
+
+
+def load_eu_carriers(con) -> frozenset:
+    """Load EU carriers (IsInUnion = 1) to make 'is_non_eu_carrier' logic work correctly."""
+    rows = con.execute("""
+        SELECT IataCode 
+        FROM AIRLINES 
+        WHERE IsInUnion = 1
+    """).fetchall()
+    return frozenset(r[0].strip().upper() for r in rows if r and r[0])
+
+
 def determine_can_eligibility(
-    connection_legs: List[Dict], canada_airports: Set[str]
+    connection_legs: List[Dict],
+    canada_airports: Set[str],
+    eu_airports: Set[str],
+    eu_carriers: Set[str],
 ) -> Dict[int, bool]:
     """
     Determine IsCanEligible for each leg in a connection.
-
     Rule: If ANY leg touches a Canada airport (From OR To),
           then ALL legs in the connection get IsCanEligible=true
+    EXCEPTIONS:
+    If Departure Airport is NON-EU and carrier is NON-EU, then IsCanEligible=false
     """
     results = {}
+    any_leg_touches_canada = False
 
     # Check if ANY leg in this connection touches Canada
-    any_leg_touches_canada = False
     for leg in connection_legs:
+        from_eu = is_eu_airport(leg.get("FromAirport"), eu_airports)
+        from_non_eu_carrier = is_non_eu_carrier(leg.get("AirlineCode"), eu_carriers)
+
+        # Exception: Departure is NON-EU AND Carrier is NON-EU
+        if not from_eu and from_non_eu_carrier:
+            continue
+
         from_can = is_canada_airport(leg.get("FromAirport"), canada_airports)
         to_can = is_canada_airport(leg.get("ToAirport"), canada_airports)
+
         if from_can or to_can:
             any_leg_touches_canada = True
             break
 
-    # Apply to ALL legs
+    # Apply to ALL legs in this connection group
     for leg in connection_legs:
         results[leg["RowId"]] = any_leg_touches_canada
 
@@ -64,17 +122,22 @@ def main():
         )
         conn.execute(f"UPDATE {SOURCE_TABLE} SET IsCanEligible = NULL")
 
-        # Load Canada airports once
+        # Load reference data sets
         canada_airports = load_canada_airports(conn)
+        eu_airports = load_eu_airports(conn)
+        eu_carriers = load_eu_carriers(conn)  # Fixed: Loading EU carriers now
+
         print(f"Loaded {len(canada_airports)} Canadian airports")
+        print(f"Loaded {len(eu_airports)} EU airports")
+        print(f"Loaded {len(eu_carriers)} EU carriers")
 
         if not canada_airports:
             print("WARNING: No Canadian airports found in AIRPORTS_ALL table!")
             return
 
-        # Fetch all connected rows
+        # Fetch all connected rows (FIXED: Added AirlineCode to SELECT statement)
         df = conn.execute(f"""
-            SELECT RowId, ConnectionID, LegNo, FromAirport, ToAirport
+            SELECT RowId, ConnectionID, LegNo, FromAirport, ToAirport, AirlineCode
             FROM {SOURCE_TABLE}
             WHERE EUEligible IS FALSE AND ConnectionID IS NOT NULL
             ORDER BY ConnectionID, LegNo
@@ -92,7 +155,10 @@ def main():
         updates = []
         for connection_id, group in df.groupby("ConnectionID"):
             legs = group.sort_values("LegNo").to_dict("records")
-            eligibility = determine_can_eligibility(legs, canada_airports)
+            # FIXED: Passed all 4 required positional arguments
+            eligibility = determine_can_eligibility(
+                legs, canada_airports, eu_airports, eu_carriers
+            )
             updates.extend(eligibility.items())
 
         if not updates:
@@ -116,14 +182,14 @@ def main():
         stats = conn.execute(f"""
             SELECT 
                 COUNT(*) AS total_rows,
-                SUM(CASE WHEN IsCanEligible = 1 THEN 1 ELSE 0 END) AS eligible_rows
+                SUM(CASE WHEN IsCanEligible = true THEN 1 ELSE 0 END) AS eligible_rows
             FROM {SOURCE_TABLE}
-            WHERE ConnectionID IS NOT NULL
+            WHERE ConnectionID IS NOT NULL AND IsCanEligible IS NOT NULL
         """).fetchone()
 
         print("\nResults:")
-        print(f"  Total connected legs: {stats[0]}")
-        print(f"  Marked IsCanEligible=True: {stats[1]}")
+        print(f"  Total processed legs: {stats[0] if stats[0] else 0}")
+        print(f"  Marked IsCanEligible=True: {stats[1] if stats[1] else 0}")
 
 
 if __name__ == "__main__":
