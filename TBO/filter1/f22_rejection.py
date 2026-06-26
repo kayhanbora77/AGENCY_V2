@@ -35,11 +35,11 @@ import pandas as pd
 # ============================================================================
 
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
-SOURCE_TABLE = "TBO_SPLIT9"  # input  table (read-only)
-TARGET_TABLE = "TBO_CLEANED"  # output table for clean / passing rows
+SOURCE_TABLE = "TBO_CLEANED2"  # input  table (read-only)
+TARGET_TABLE = "TBO_CLEANED3"  # output table for clean / passing rows
 REJECTION_TABLE = "TBO_REJECTION"  # output table for rejected rows
 
-MAX_FLIGHTS = 3
+MAX_FLIGHTS = 4
 MAX_FLTNO_LEN = 8  # max characters a flight number may have
 BATCH_SIZE = 200_000
 
@@ -89,6 +89,7 @@ class Reason(str, Enum):
     MISSING_REQUIRED_SLOT = "MISSING REQUIRED SLOT (FlightNo1/FlightDate1)"
     AC_BAD_FORMAT = "AirlineCode BAD_FORMAT"
     AP_BAD_FORMAT = "Airport BAD_FORMAT"
+    FN_CONSECUTIVE_DUPLICATE = "FlightNumber CONSECUTIVE_DUPLICATE"
 
 
 # ============================================================================
@@ -120,6 +121,31 @@ _DATE_FMTS = [
     "%B %d %Y",
     "%d %B %Y",
 ]
+
+
+def check_consecutive_duplicate_flightno(row):
+    """Reject if any two consecutive FlightNumber slots are identical
+    (e.g. FlightNumber1 == FlightNumber2, or FlightNumber3 == FlightNumber4)."""
+    reasons = []
+    for i in range(1, MAX_FLIGHTS):
+        fn_a = row.get(f"FlightNumber{i}")
+        fn_b = row.get(f"FlightNumber{i + 1}")
+
+        if _isna(fn_a) or _isna(fn_b):
+            continue
+
+        fn_a_str = str(fn_a).strip().upper()
+        fn_b_str = str(fn_b).strip().upper()
+
+        if fn_a_str and fn_a_str == fn_b_str:
+            reasons.append(
+                f"Slot{i}/Slot{i + 1}: {Reason.FN_CONSECUTIVE_DUPLICATE} "
+                f"(FlightNumber{i}={fn_a_str!r} == FlightNumber{i + 1}={fn_b_str!r})"
+            )
+
+    if reasons:
+        return True, "; ".join(reasons)
+    return False, None
 
 
 def _fix_row_flightnos(row: dict) -> dict:
@@ -456,6 +482,7 @@ def find_batch_duplicates(batch: list[dict], seen_keys: set):
 _CHECKS = [
     check_missing_required_slot,
     check_flightno_validity,
+    check_consecutive_duplicate_flightno,
     check_route_overflow,
     check_flightdate_format_and_range,
     check_airline_code,
