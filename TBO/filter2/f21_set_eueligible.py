@@ -20,7 +20,7 @@ class Config:
     threads: int = 8
     memory_limit: str = "8GB"
     temp_dir: str = r"C:\DuckDB\temp"
-    source_table: str = "TBO_CLEANED"
+    source_table: str = "TBO_CLEANED3"
     target_table: str = "TA_STANDARD_TBO"
     read_chunk: int = 200_000
     parse_workers: int = 4
