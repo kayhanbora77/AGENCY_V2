@@ -75,39 +75,38 @@ def load_eu_carriers(con) -> frozenset:
     return frozenset(r[0].strip().upper() for r in rows if r and r[0])
 
 
-def determine_can_eligibility(
+def determine_canada_eligibility(
     connection_legs: List[Dict],
     canada_airports: Set[str],
     eu_airports: Set[str],
     eu_carriers: Set[str],
 ) -> Dict[int, bool]:
     """
-    Determine IsCanEligible for each leg in a connection.
-    Rule: If ANY leg touches a Canada airport (From OR To),
-          then ALL legs in the connection get IsCanEligible=true
-    EXCEPTIONS:
-    If Departure Airport is NON-EU and carrier is NON-EU, then IsCanEligible=false
+    Rule: If ANY leg touches Canada (From OR To), ALL legs get IsCanEligible=True
+    
+    Exception: If departure airport is NOT Canada AND NOT EU AND carrier is NON-EU
+               → that leg doesn't count toward Canada eligibility
     """
     results = {}
     any_leg_touches_canada = False
 
-    # Check if ANY leg in this connection touches Canada
     for leg in connection_legs:
         from_eu = is_eu_airport(leg.get("FromAirport"), eu_airports)
+        from_can = is_canada_airport(leg.get("FromAirport"), canada_airports)
         from_non_eu_carrier = is_non_eu_carrier(leg.get("AirlineCode"), eu_carriers)
 
-        # Exception: Departure is NON-EU AND Carrier is NON-EU
-        if not from_eu and from_non_eu_carrier:
+        # ── EXCEPTION ──────────────────────────────────────────────
+        # Departure NOT Canada AND NOT EU AND NON-EU carrier → skip
+        # ───────────────────────────────────────────────────────────
+        if not from_can and not from_eu and from_non_eu_carrier:
             continue
 
-        from_can = is_canada_airport(leg.get("FromAirport"), canada_airports)
         to_can = is_canada_airport(leg.get("ToAirport"), canada_airports)
 
         if from_can or to_can:
             any_leg_touches_canada = True
             break
 
-    # Apply to ALL legs in this connection group
     for leg in connection_legs:
         results[leg["RowId"]] = any_leg_touches_canada
 
@@ -156,7 +155,7 @@ def main():
         for connection_id, group in df.groupby("ConnectionID"):
             legs = group.sort_values("LegNo").to_dict("records")
             # FIXED: Passed all 4 required positional arguments
-            eligibility = determine_can_eligibility(
+            eligibility = determine_canada_eligibility(
                 legs, canada_airports, eu_airports, eu_carriers
             )
             updates.extend(eligibility.items())
