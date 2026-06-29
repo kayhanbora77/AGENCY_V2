@@ -82,25 +82,14 @@ def determine_canada_eligibility(
     eu_carriers: Set[str],
 ) -> Dict[int, bool]:
     """
-    Rule: If ANY leg touches Canada (From OR To), ALL legs get IsCanEligible=True
-    
-    Exception: If departure airport is NOT Canada AND NOT EU AND carrier is NON-EU
-               → that leg doesn't count toward Canada eligibility
+    Rule: If ANY leg touches Canada (From OR To), 
+          ALL legs in the connection get IsCanEligible=True
     """
     results = {}
     any_leg_touches_canada = False
 
     for leg in connection_legs:
-        from_eu = is_eu_airport(leg.get("FromAirport"), eu_airports)
         from_can = is_canada_airport(leg.get("FromAirport"), canada_airports)
-        from_non_eu_carrier = is_non_eu_carrier(leg.get("AirlineCode"), eu_carriers)
-
-        # ── EXCEPTION ──────────────────────────────────────────────
-        # Departure NOT Canada AND NOT EU AND NON-EU carrier → skip
-        # ───────────────────────────────────────────────────────────
-        if not from_can and not from_eu and from_non_eu_carrier:
-            continue
-
         to_can = is_canada_airport(leg.get("ToAirport"), canada_airports)
 
         if from_can or to_can:
@@ -111,7 +100,6 @@ def determine_canada_eligibility(
         results[leg["RowId"]] = any_leg_touches_canada
 
     return results
-
 
 def main():
     with duckdb.connect(DB_PATH) as conn:
