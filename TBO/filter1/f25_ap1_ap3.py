@@ -99,12 +99,12 @@ def get_flights_airports(row_list):
 
 def find_all_split_points(flights, airports):
     """
-    Rule 1 — Exactly 4 flights, 5 airports, Airport2 == Airport4:
-        e.g. BLR → CMB → BKK → CMB → MAA
-             [0]    [1]   [2]    [3]    [4]
+    Rule 1 — Exactly 2 flights, 3 airports, Airport1 == Airport3:
+        e.g. SGN → PQC → SGN
+             [0]    [1]   [2]   
         Split at flight boundary 1:
-          Segment 1: Flight1,Flight2 | Airport1 → Airport2 → Airport3          (BLR → CMB → BKK)
-          Segment 2: Flight3,Flight4 | Airport3 → Airport4 → Airport5          (BKK → CMB → MAA)
+          Segment 1: Flight1 | Airport1 → Airport2       (SGN → PQC)
+          Segment 2: Flight2 | Airport2 → Airport3       (PQC → SGN)
 
     Rule 2 — Date gap > 1 day between consecutive flights:
         Split at that flight boundary.
@@ -117,9 +117,9 @@ def find_all_split_points(flights, airports):
 
     split_points = set()
 
-    # ── Rule 1: exactly 4 flights, 5 airports, Airport2 == Airport4 ──────────
-    if n_f == 4 and n_a == 5 and airports[1] == airports[3]:
-        split_points.add(2)
+    # ── Rule 1: exactly 2 flights, 3 airports, Airport1 == Airport3 ──────────
+    if n_f == 2 and n_a == 3 and airports[0] == airports[2]:
+        split_points.add(1)
 
     # ── Rule 2: date gap > 1 day ─────────────────────────────────────────────
     for i in range(n_f - 1):
@@ -264,7 +264,7 @@ def process_table(db_path=DB_PATH, table=SOURCE_TABLE, batch_size=BATCH_SIZE):
     filtered_total = con.execute(f"""
         SELECT COUNT(*)
         FROM "{table}"
-        {AP2_AP4_WHERE_CLAUSE}
+        {AP1_AP3_WHERE_CLAUSE}
     """).fetchone()[0]
     print(
         f"\n  Step 2: Processing {filtered_total:,} 4-flight round-trip rows for split..."
@@ -279,7 +279,7 @@ def process_table(db_path=DB_PATH, table=SOURCE_TABLE, batch_size=BATCH_SIZE):
     cursor.execute(f"""
         SELECT {col_list}
         FROM "{table}"
-        {AP2_AP4_WHERE_CLAUSE}
+        {AP1_AP3_WHERE_CLAUSE}
     """)
 
     while True:

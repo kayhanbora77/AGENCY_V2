@@ -102,7 +102,7 @@ class ReferenceData:
     )
 
     def __init__(self, con: duckdb.DuckDBPyConnection):
-        self.eu_airports: frozenset = self._load_airports(con)
+        self.eu_airports: frozenset = self._load_eu_airports(con)
         self.eu_carriers: frozenset = self._load_carriers(con)
         self.tr_airports: frozenset = self._load_tr_airports(con)
         self.uk_airports: frozenset = self._load_uk_airports(con)
@@ -113,9 +113,9 @@ class ReferenceData:
         )
 
     @staticmethod
-    def _load_airports(con) -> frozenset:
+    def _load_eu_airports(con) -> frozenset:
         rows = con.execute("""
-            SELECT CodeIataAirport,timezone 
+            SELECT CodeIataAirport
             FROM AIRPORTS 
         WHERE CodeIso2Country NOT IN ('TR','MA')
         """).fetchall()
@@ -217,31 +217,35 @@ class ChunkProcessor:
         return result
 
     def process(self, df: pd.DataFrame) -> pd.DataFrame:
+
         if df.empty:
             return pd.DataFrame(columns=self._target_cols)
 
-        df = df.copy()
+        # 1. Clean the flight column directly inside the dataframe
+        df["FlightNumber"] = (
+            df["FlightNumber"]
+            .fillna("")
+            .astype(str)
+            .apply(_fix_scientific_notation)
+            .str.strip()
+            .str.upper()
+        )
 
-        # Clean flight number
-        clean_flight = df["FlightNumber"].apply(_fix_scientific_notation)
-        clean_flight = clean_flight.astype(str).str.strip().str.upper()
-
-        # Validate required fields
+        # 2. Build a reliable mask with safe string lookups
         valid_mask = (
             df["FlightNumber"].notna()
+            & (df["FlightNumber"] != "")
+            & (~df["FlightNumber"].isin(["NAN", "NONE", "N/A"]))
             & df["NewDepAirport"].notna()
             & df["NewArrAirport"].notna()
             & df["DepartureDate"].notna()
-            & (clean_flight != "")
-            & (clean_flight != "NAN")
-            & (clean_flight != "NONE")
-            & (clean_flight != "N/A")
         )
+        
         df = df.loc[valid_mask].copy()
         if df.empty:
             return pd.DataFrame(columns=self._target_cols)
 
-        # Parse dates
+        # 3. Safely parse timestamps (handles both Timestamp objects and raw strings)
         df["DepartureDate_parsed"] = pd.to_datetime(
             df["DepartureDate"], errors="coerce"
         )
@@ -249,8 +253,7 @@ class ChunkProcessor:
         if df.empty:
             return pd.DataFrame(columns=self._target_cols)
 
-        # Map columns to target format
-        df["FlightNumber"] = clean_flight.loc[valid_mask].values
+        # 4. Map columns directly without using .values alignment hazards
         df["FromAirport"] = df["NewDepAirport"].astype(str).str.strip().str.upper()
         df["ToAirport"] = df["NewArrAirport"].astype(str).str.strip().str.upper()
         df["AirlineCode"] = df["Airline"].astype(str).str.strip().str.upper()
@@ -343,78 +346,42 @@ class ChunkProcessor:
         if df.empty:
             return pd.Series(dtype=bool)
 
-        # Use ConnectionID for grouping (not _uid)
         uid_col = "ConnectionID"
-
         sorted_legs = df.sort_values("LegNo", kind="mergesort")
+
+        # Domestic-TR journey check (still needs first/last by LegNo order)
         first_airports = sorted_legs.groupby(uid_col, sort=False)["FromAirport"].first()
         last_airports = sorted_legs.groupby(uid_col, sort=False)["ToAirport"].last()
+        domestic_tr_journeys = first_airports.isin(self.tr_airports) & last_airports.isin(self.tr_airports)
+        is_domestic_tr = df[uid_col].map(domestic_tr_journeys).fillna(False).astype(bool)
 
-        domestic_tr_journeys = first_airports.isin(
-            self.tr_airports
-        ) & last_airports.isin(self.tr_airports)
-        is_domestic_tr = (
-            df[uid_col].map(domestic_tr_journeys).fillna(False).astype(bool)
-        )
-
+        # --- Per-leg eligibility flags (order doesn't matter here) ---
         is_uk_carrier = df["AirlineCode"].isin(UK_CARRIERS)
-        touches_uk = df["FromAirport"].isin(self.uk_airports) | df["ToAirport"].isin(
-            self.uk_airports
-        )
-        uk_eligible_legs = is_uk_carrier & touches_uk
-        uk_journey_eligible = uk_eligible_legs.groupby(df[uid_col], sort=False).any()
+        touches_uk = df["FromAirport"].isin(self.uk_airports) | df["ToAirport"].isin(self.uk_airports)
+        uk_leg_eligible = is_uk_carrier & touches_uk
 
         is_tr_carrier = df["AirlineCode"].isin(TR_CARRIERS)
-        touches_tr = df["FromAirport"].isin(self.tr_airports) | df["ToAirport"].isin(
-            self.tr_airports
-        )
-        tr_eligible_legs = is_tr_carrier & touches_tr & ~is_domestic_tr
-        tr_journey_eligible = tr_eligible_legs.groupby(df[uid_col], sort=False).any()
+        touches_tr = df["FromAirport"].isin(self.tr_airports) | df["ToAirport"].isin(self.tr_airports)
+        tr_leg_eligible = is_tr_carrier & touches_tr  # domestic-TR exclusion applied at journey level below
 
         is_srb_carrier = df["AirlineCode"].isin(SRB_CARRIERS)
-        touches_srb = df["FromAirport"].isin(SRB_AIRPORTS) | df["ToAirport"].isin(
-            SRB_AIRPORTS
-        )
-        srb_eligible_legs = is_srb_carrier & touches_srb
-        srb_journey_eligible = srb_eligible_legs.groupby(df[uid_col], sort=False).any()
+        touches_srb = df["FromAirport"].isin(SRB_AIRPORTS) | df["ToAirport"].isin(SRB_AIRPORTS)
+        srb_leg_eligible = is_srb_carrier & touches_srb
 
         eu_dep = df["FromAirport"].isin(self.eu_airports)
         eu_arr = df["ToAirport"].isin(self.eu_airports)
         eu_carrier = df["AirlineCode"].isin(self.eu_carriers)
         is_special = df["AirlineCode"].isin(SPECIAL_NON_EU_CARRIERS)
         inbound_ok = (~eu_dep) & eu_arr & (eu_carrier | is_special)
+        eu_leg_eligible = eu_dep | inbound_ok
 
-        journey_df = pd.DataFrame(
-            {
-                uid_col: df[uid_col],
-                "eu_dep": eu_dep,
-                "eu_arr": eu_arr,
-                "inbound_ok": inbound_ok,
-            }
-        )
+        leg_eligible = uk_leg_eligible | tr_leg_eligible | srb_leg_eligible | eu_leg_eligible
 
-        journey_agg = journey_df.groupby(uid_col, sort=False).agg(
-            first_eu_dep=("eu_dep", "first"),
-            last_eu_arr=("eu_arr", "last"),
-            any_inbound_ok=("inbound_ok", "any"),
-        )
+        # --- If ANY leg in the journey is eligible, mark the whole journey eligible ---
+        journey_eligible = leg_eligible.groupby(df[uid_col], sort=False).any()
+        journey_eligible_mapped = df[uid_col].map(journey_eligible).fillna(False).astype(bool)
 
-        eu_journey_eligible = journey_agg["first_eu_dep"] | (
-            ~journey_agg["first_eu_dep"]
-            & journey_agg["last_eu_arr"]
-            & journey_agg["any_inbound_ok"]
-        )
-
-        all_eligible = (
-            uk_journey_eligible
-            | tr_journey_eligible
-            | srb_journey_eligible
-            | eu_journey_eligible
-        )
-
-        eligible_mapped = df[uid_col].map(all_eligible).fillna(False).astype(bool)
-        return eligible_mapped & (~is_domestic_tr)
-
+        return journey_eligible_mapped & (~is_domestic_tr)
 
 # ==================================================
 # IMPORTER / ORCHESTRATOR
