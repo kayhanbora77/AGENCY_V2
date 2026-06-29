@@ -324,10 +324,22 @@ class ChunkProcessor:
 
         return df[self._target_cols].reset_index(drop=True)
 
-    # NOTE: _extract_leg() DELETED - not needed for LONG format data
+    """
+            Determines EU 261/2004 eligibility for each flight leg in the DataFrame.
 
+            A journey is eligible under any of the following rule groups:
+            - UK Rule   : operated by a UK carrier (BA, VS) AND touches a UK airport
+            - TR Rule   : operated by a TR carrier (TK, PC, FH, XQ, VF) AND touches a TR airport
+                            AND the journey is NOT purely domestic within Turkey
+            - SRB Rule  : operated by a SRB carrier (JU) AND touches a Serbian airport (BEG/INI/KVO)
+            - EU Rule   : departs from an EU airport (outbound)  OR
+                            arrives at an EU airport on an inbound leg operated by an EU carrier
+                            or a special non-EU carrier (BA, TK, PC, JU, FH, VF, VS, XQ)
+
+            Final result applies to every leg of an eligible journey EXCEPT legs that are
+            part of a purely domestic Turkish itinerary (TR→TR), which are always excluded.
+    """
     def _vectorized_eligibility(self, df: pd.DataFrame) -> pd.Series:
-        # ... (same as before, but use "ConnectionID" instead of "_uid")
         if df.empty:
             return pd.Series(dtype=bool)
 
