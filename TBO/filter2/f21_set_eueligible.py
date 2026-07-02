@@ -20,7 +20,7 @@ class Config:
     threads: int = 8
     memory_limit: str = "8GB"
     temp_dir: str = r"C:\DuckDB\temp"
-    source_table: str = "TBO_CLEANED3"
+    source_table: str = "TBO_CLEANED6"
     target_table: str = "TA_STANDARD_TBO"
     read_chunk: int = 200_000
     parse_workers: int = 4
@@ -308,9 +308,7 @@ class ChunkProcessor:
             {
                 "_uid": sub["_uid"].values,
                 "LegNo": leg_num,
-                "FlightNumber": clean_flight.loc[valid_mask].values
-                if len(valid_mask) == len(clean_flight)
-                else clean_flight.values,
+                "FlightNumber": clean_flight.loc[sub.index].values,
                 "DepartureDate": dates.values
                 if isinstance(dates, pd.Series)
                 else dates,
@@ -346,102 +344,64 @@ class ChunkProcessor:
             }
         )
 
+    """
+            Determines EU 261/2004 eligibility for each flight leg in the DataFrame.
+
+            A journey is eligible under any of the following rule groups:
+            - UK Rule   : operated by a UK carrier (BA, VS) AND touches a UK airport
+            - TR Rule   : operated by a TR carrier (TK, PC, FH, XQ, VF) AND touches a TR airport
+                            AND the journey is NOT purely domestic within Turkey
+            - SRB Rule  : operated by a SRB carrier (JU) AND touches a Serbian airport (BEG/INI/KVO)
+            - EU Rule   : departs from an EU airport (outbound)  OR
+                            arrives at an EU airport on an inbound leg operated by an EU carrier
+                            or a special non-EU carrier (BA, TK, PC, JU, FH, VF, VS, XQ)
+
+            Final result applies to every leg of an eligible journey EXCEPT legs that are
+            part of a purely domestic Turkish itinerary (TR→TR), which are always excluded.
+    """
     def _vectorized_eligibility(self, df: pd.DataFrame) -> pd.Series:
-        """
-        Check every leg's airline carrier:
-        1. Domestic TR flights (First and Last airport in TR) are NEVER eligible.
-        2. If carrier is UK and FromAirport or ToAirport is UK → ALL legs with same _uid are Eligible
-        3. If carrier is TR and FromAirport or ToAirport is TR → ALL legs with same _uid are Eligible
-        4. If carrier is SRB and FromAirport or ToAirport is SRB → ALL legs with same _uid are Eligible
-        5. Otherwise apply EU261 rules
-        """
         if df.empty:
             return pd.Series(dtype=bool)
 
-        # --- NEW RULE: Domestic TR flights (First and Last airport in TR) are NOT eligible ---
-        # Turkey does not pay compensation for these flights
+        uid_col = "ConnectionID"
         sorted_legs = df.sort_values("LegNo", kind="mergesort")
-        first_airports = sorted_legs.groupby("_uid", sort=False)["FromAirport"].first()
-        last_airports = sorted_legs.groupby("_uid", sort=False)["ToAirport"].last()
 
-        # Check if both the start and end of the journey are in Turkey
-        domestic_tr_journeys = first_airports.isin(
-            self.tr_airports
-        ) & last_airports.isin(self.tr_airports)
-
-        # Map this boolean flag back to every row in the chunk
-        is_domestic_tr = df["_uid"].map(domestic_tr_journeys).fillna(False).astype(bool)
-
-        # --- RULE 1: UK Carrier + UK Airport on ANY leg → entire journey eligible ---
+        # Domestic-TR journey check (still needs first/last by LegNo order)
+        # first_airports = sorted_legs.groupby(uid_col, sort=False)["FromAirport"].first()
+        # last_airports = sorted_legs.groupby(uid_col, sort=False)["ToAirport"].last()
+        # domestic_tr_journeys = first_airports.isin(self.tr_airports) & last_airports.isin(self.tr_airports)
+        # is_domestic_tr = df[uid_col].map(domestic_tr_journeys).fillna(False).astype(bool)
+        leg_is_tr_domestic = df["FromAirport"].isin(self.tr_airports) & df["ToAirport"].isin(self.tr_airports)
+        all_legs_tr_domestic = leg_is_tr_domestic.groupby(df[uid_col], sort=False).all()
+        is_domestic_tr = df[uid_col].map(all_legs_tr_domestic).fillna(False).astype(bool)
+        
+        # --- Per-leg eligibility flags (order doesn't matter here) ---
         is_uk_carrier = df["AirlineCode"].isin(UK_CARRIERS)
-        touches_uk = df["FromAirport"].isin(self.uk_airports) | df["ToAirport"].isin(
-            self.uk_airports
-        )
-        uk_eligible_legs = is_uk_carrier & touches_uk
-        uk_journey_eligible = uk_eligible_legs.groupby(df["_uid"], sort=False).any()
+        touches_uk = df["FromAirport"].isin(self.uk_airports) | df["ToAirport"].isin(self.uk_airports)
+        uk_leg_eligible = is_uk_carrier & touches_uk
 
-        # --- RULE 2: TR Carrier + TR Airport on ANY leg → entire journey eligible ---
         is_tr_carrier = df["AirlineCode"].isin(TR_CARRIERS)
-        touches_tr = df["FromAirport"].isin(self.tr_airports) | df["ToAirport"].isin(
-            self.tr_airports
-        )
-        tr_eligible_legs = is_tr_carrier & touches_tr & ~is_domestic_tr
-        tr_journey_eligible = tr_eligible_legs.groupby(df["_uid"], sort=False).any()
+        touches_tr = df["FromAirport"].isin(self.tr_airports) | df["ToAirport"].isin(self.tr_airports)
+        tr_leg_eligible = is_tr_carrier & touches_tr  # domestic-TR exclusion applied at journey level below
 
-        # --- RULE 3: SRB Carrier + SRB Airport on ANY leg → entire journey eligible ---
         is_srb_carrier = df["AirlineCode"].isin(SRB_CARRIERS)
-        touches_srb = df["FromAirport"].isin(SRB_AIRPORTS) | df["ToAirport"].isin(
-            SRB_AIRPORTS
-        )
-        srb_eligible_legs = is_srb_carrier & touches_srb
-        srb_journey_eligible = srb_eligible_legs.groupby(df["_uid"], sort=False).any()
+        touches_srb = df["FromAirport"].isin(SRB_AIRPORTS) | df["ToAirport"].isin(SRB_AIRPORTS)
+        srb_leg_eligible = is_srb_carrier & touches_srb
 
-        # EU261 logic
         eu_dep = df["FromAirport"].isin(self.eu_airports)
         eu_arr = df["ToAirport"].isin(self.eu_airports)
         eu_carrier = df["AirlineCode"].isin(self.eu_carriers)
         is_special = df["AirlineCode"].isin(SPECIAL_NON_EU_CARRIERS)
-
-        # Inbound: non-EU departure, EU arrival, with EU or special carrier
         inbound_ok = (~eu_dep) & eu_arr & (eu_carrier | is_special)
+        eu_leg_eligible = eu_dep | inbound_ok
 
-        # Journey-level aggregation for EU261
-        journey_df = pd.DataFrame(
-            {
-                "_uid": df["_uid"],
-                "eu_dep": eu_dep,
-                "eu_arr": eu_arr,
-                "inbound_ok": inbound_ok,
-            }
-        )
+        leg_eligible = uk_leg_eligible | tr_leg_eligible | srb_leg_eligible | eu_leg_eligible
 
-        journey_agg = journey_df.groupby("_uid", sort=False).agg(
-            first_eu_dep=("eu_dep", "first"),
-            last_eu_arr=("eu_arr", "last"),
-            any_inbound_ok=("inbound_ok", "any"),
-        )
+        # --- If ANY leg in the journey is eligible, mark the whole journey eligible ---
+        journey_eligible = leg_eligible.groupby(df[uid_col], sort=False).any()
+        journey_eligible_mapped = df[uid_col].map(journey_eligible).fillna(False).astype(bool)
 
-        # EU261: departure from EU, OR (non-EU departure + EU arrival + inbound_ok)
-        eu_journey_eligible = journey_agg["first_eu_dep"] | (
-            ~journey_agg["first_eu_dep"]
-            & journey_agg["last_eu_arr"]
-            & journey_agg["any_inbound_ok"]
-        )
-
-        # Combine all rules — FIX: include srb_journey_eligible!
-        all_eligible = (
-            uk_journey_eligible
-            | tr_journey_eligible
-            | srb_journey_eligible
-            | eu_journey_eligible
-        )
-
-        # Map the combined eligibility back to each row
-        eligible_mapped = df["_uid"].map(all_eligible).fillna(False).astype(bool)
-
-        # --- APPLY OVERRIDE ---
-        # If a journey is classified as domestic TR, force it to False regardless of other rules
-        return eligible_mapped & (~is_domestic_tr)
+        return journey_eligible_mapped & (~is_domestic_tr)
 
 
 # ==================================================
