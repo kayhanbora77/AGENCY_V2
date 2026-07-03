@@ -1,0 +1,3 @@
+1- rnk ları bölelim tamam ama bunu tarihten önce yapalım
+2- rnk ları böldüğümüz satırlarda airport sayısı flight number isayısı ile ilişkili olmasa da bölelim. airport sayısına takılmayalım. özellikle 6 ve 7 flight olanlarda
+3- flight number ı 4 ve daha fazla olan ama tarihinde hiç değişme olmamış satırları baştan eliyoruz.
