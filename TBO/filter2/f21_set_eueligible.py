@@ -230,14 +230,12 @@ class ChunkProcessor:
             .rename("LastLegAirport")
         )
         all_legs = all_legs.join(last_airports, on="_uid")
-
-        # EU Eligibility (vectorized)
-        all_legs["EUEligible"] = self._vectorized_eligibility(all_legs)
-
         # Vectorized Connection IDs mapping
         uid_list = all_legs["_uid"].unique()
         conn_map = {uid: str(uuid.uuid4()) for uid in uid_list}
         all_legs["ConnectionID"] = all_legs["_uid"].map(conn_map)
+        # EU Eligibility (vectorized)
+        all_legs["EUEligible"] = self._vectorized_eligibility(all_legs)
 
         # High-speed static configuration initialization
         placeholders = {
@@ -345,19 +343,34 @@ class ChunkProcessor:
         )
 
     """
-            Determines EU 261/2004 eligibility for each flight leg in the DataFrame.
+    Determines eligibility for EU 261/2004, UK 261/2004, and Turkish SHY regulations 
+    for each flight leg in the DataFrame.
 
-            A journey is eligible under any of the following rule groups:
-            - UK Rule   : operated by a UK carrier (BA, VS) AND touches a UK airport
-            - TR Rule   : operated by a TR carrier (TK, PC, FH, XQ, VF) AND touches a TR airport
-                            AND the journey is NOT purely domestic within Turkey
-            - SRB Rule  : operated by a SRB carrier (JU) AND touches a Serbian airport (BEG/INI/KVO)
-            - EU Rule   : departs from an EU airport (outbound)  OR
-                            arrives at an EU airport on an inbound leg operated by an EU carrier
-                            or a special non-EU carrier (BA, TK, PC, JU, FH, VF, VS, XQ)
+    A journey is eligible under any of the following rule groups:
 
-            Final result applies to every leg of an eligible journey EXCEPT legs that are
-            part of a purely domestic Turkish itinerary (TR→TR), which are always excluded.
+    1. EU Rule (EU261/2004):
+    - Outbound: Departs from an EU/EEA airport (any airline)
+    - Inbound: Arrives at an EU/EEA airport on an EU carrier OR a special non-EU carrier
+        (BA, TK, PC, JU, FH, VF, VS, XQ)
+
+    2. UK Rule (UK261/2004):
+    - Outbound: Departs from a UK airport (any airline)
+    - Inbound: Arrives at a UK airport on a UK carrier (BA, VS) OR an EU carrier
+
+    3. TR Rule (Turkish SHY):
+    - Operated by a Turkish carrier (TK, PC, FH, XQ, VF) AND touches a Turkish airport
+    - EXCLUSION: Purely domestic Turkish itineraries (all legs TR→TR) are NOT eligible
+
+    4. SRB Rule (Serbian Regulation):
+    - Operated by a Serbian carrier (JU) AND touches a Serbian airport (BEG, INI, KVO)
+
+    Eligibility Logic:
+    - If ANY leg in a multi-leg journey is eligible, the ENTIRE journey is marked eligible
+    - Exception: Purely domestic Turkish journeys (TR→TR→TR...) are ALWAYS excluded,
+    even if they contain eligible legs
+
+    Returns:
+        pd.Series: Boolean Series where True indicates the leg is part of an eligible journey
     """
     def _vectorized_eligibility(self, df: pd.DataFrame) -> pd.Series:
         if df.empty:
@@ -366,19 +379,14 @@ class ChunkProcessor:
         uid_col = "ConnectionID"
         sorted_legs = df.sort_values("LegNo", kind="mergesort")
 
-        # Domestic-TR journey check (still needs first/last by LegNo order)
-        # first_airports = sorted_legs.groupby(uid_col, sort=False)["FromAirport"].first()
-        # last_airports = sorted_legs.groupby(uid_col, sort=False)["ToAirport"].last()
-        # domestic_tr_journeys = first_airports.isin(self.tr_airports) & last_airports.isin(self.tr_airports)
-        # is_domestic_tr = df[uid_col].map(domestic_tr_journeys).fillna(False).astype(bool)
         leg_is_tr_domestic = df["FromAirport"].isin(self.tr_airports) & df["ToAirport"].isin(self.tr_airports)
         all_legs_tr_domestic = leg_is_tr_domestic.groupby(df[uid_col], sort=False).all()
         is_domestic_tr = df[uid_col].map(all_legs_tr_domestic).fillna(False).astype(bool)
         
         # --- Per-leg eligibility flags (order doesn't matter here) ---
-        is_uk_carrier = df["AirlineCode"].isin(UK_CARRIERS)
+        is_uk_or_eu_carrier = df["AirlineCode"].isin(UK_CARRIERS | self.eu_carriers)
         touches_uk = df["FromAirport"].isin(self.uk_airports) | df["ToAirport"].isin(self.uk_airports)
-        uk_leg_eligible = is_uk_carrier & touches_uk
+        uk_leg_eligible = is_uk_or_eu_carrier & touches_uk
 
         is_tr_carrier = df["AirlineCode"].isin(TR_CARRIERS)
         touches_tr = df["FromAirport"].isin(self.tr_airports) | df["ToAirport"].isin(self.tr_airports)
@@ -442,7 +450,7 @@ class CreateTAStandardTable:
                 ETicketNo VARCHAR, FlightNumber VARCHAR, DepartureDate TIMESTAMP, 
                 FileName VARCHAR, BookingRef VARCHAR, AirlineCode VARCHAR, 
                 FromAirport VARCHAR, ToAirport VARCHAR, LastLegAirport VARCHAR, 
-                GMTDeparture DECIMAL(3,1), GMTArrival DECIMAL(3,1),
+                GMTDeparture DECIMAL(4,1), GMTArrival DECIMAL(4,1),
                 EUEligible BOOLEAN, EUEligibleDuration INTEGER, ExtraNote VARCHAR, 
                 FlightFound BOOLEAN, LegNo INTEGER, IsTimeLimitL1 BOOLEAN, 
                 IsTimeLimitL2 BOOLEAN, EUFlights_Id VARCHAR, Link_Id VARCHAR, 
