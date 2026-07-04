@@ -25,8 +25,8 @@ from datetime import datetime
 # ============================================================================
 
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
-SOURCE_TABLE = "TBO_RAW"
-TARGET_TABLE = "TBO_SPLIT"
+SOURCE_TABLE = "TBO_SPLIT"
+TARGET_TABLE = "TBO_SPLIT2"
 REJECT_TABLE = "TBO_REJECTION"
 
 MAX_FLIGHTS = 7
@@ -46,8 +46,9 @@ DATE_COLS = [
 AIRPORT_COLS = [f"Airport{i + 1}" for i in range(MAX_AIRPORTS)]  # Airport1..8
 DYNAMIC_COLS = FLIGHT_COLS + DATE_COLS + AIRPORT_COLS
 
-_RE_FLTNO = re.compile(r"^[A-Z0-9]{2,3}\d+$")
+_RE_FLTNO = re.compile(r"^[A-Z]{2,3}\d+$")  # Fixed: only letters, not alphanumeric
 _RE_SCI_NOTATION = re.compile(r"^(\d+)(?:\.0+)?E\+?(\d+)$", re.IGNORECASE)
+_RE_FLTNO_WITH_SPACE = re.compile(r"^([A-Z]{1,3})\s+(\d+)$", re.IGNORECASE)  # Handle "G 217", "K 1475"
 
 STATIC_COLS = [
     "PaxName",
@@ -76,28 +77,49 @@ def _isna(val) -> bool:
         return True
     return False
 
+
 def _fix_scientific_notation(fn: str) -> str:
     """Collapse Excel-mangled scientific notation, e.g. '6.00E+78' -> '6E78'."""
+    if not isinstance(fn, str):
+        fn = str(fn)
     m = _RE_SCI_NOTATION.fullmatch(fn.strip())
     if not m:
         return fn
     mantissa, exponent = m.group(1), m.group(2)
     return f"{mantissa}E{exponent}"
 
+
 def normalize_flight_numbers(row: dict) -> dict:
     """
-    Rule 7 — strip leading zeros between prefix letters and digit suffix.
-    Uses FlightNumber{i} to match TBO_RAW schema.
+    Normalize flight numbers:
+    - Remove spaces: "G 217" -> "G217", "K 1475" -> "K1475"
+    - Strip leading zeros: "SV0020" -> "SV20"
+    - Fix scientific notation: "6.00E+78" -> "6E78"
     """
     row = dict(row)
     for i in range(1, MAX_FLIGHTS + 1):
         fn = row.get(f"FlightNumber{i}")
         if not _isna(fn):
             fn_str = str(fn).strip()
+            
+            # Fix scientific notation first
+            fn_str = _fix_scientific_notation(fn_str)
+            
+            # Remove spaces between letters and numbers: "G 217" -> "G217"
+            fn_str = re.sub(r'\s+', '', fn_str)
+            
             fn_upper = fn_str.upper()
+            
+            # Check if it matches the pattern with space removed
             if _RE_FLTNO.fullmatch(fn_upper):
                 row[f"FlightNumber{i}"] = _normalize_flightno(fn_upper)
-            row[f"FlightNumber{i}"] = fn_str.fillna("").astype(str).apply(_fix_scientific_notation).str.strip().str.upper()
+            else:
+                # Try to extract airline code and number even if format is slightly off
+                normalized = _normalize_any_flightno(fn_upper)
+                if normalized:
+                    row[f"FlightNumber{i}"] = normalized
+                else:
+                    row[f"FlightNumber{i}"] = fn_upper
     return row
 
 
@@ -106,12 +128,38 @@ def _normalize_flightno(fn: str) -> str:
     Remove leading zeros between the alphabetic prefix and the numeric suffix.
     E.g.  SV0020 → SV20,  AF0459 → AF459,  EK001 → EK1
     """
-    m = re.fullmatch(r"([A-Z0-9]{2,3}?)(\d+)", fn.upper().strip())
+    m = re.fullmatch(r"([A-Z]{2,3})(\d+)", fn.upper().strip())
     if not m:
         return fn
     prefix, digits = m.group(1), m.group(2)
     normalized_digits = digits.lstrip("0") or "0"
     return prefix + normalized_digits
+
+
+def _normalize_any_flightno(fn: str) -> str:
+    """
+    Normalize any flight number format:
+    - "G217" -> "G217" (already normalized)
+    - "G 217" -> "G217"
+    - "K1475" -> "K1475"
+    - "SV0020" -> "SV20"
+    - "EK001" -> "EK1"
+    """
+    if not fn:
+        return None
+    
+    # Remove all spaces
+    fn = re.sub(r'\s+', '', fn)
+    
+    # Try to match pattern: letters followed by digits
+    m = re.fullmatch(r"([A-Z]{1,3})(\d+)", fn)
+    if m:
+        prefix, digits = m.group(1), m.group(2)
+        # Remove leading zeros from digits
+        normalized_digits = digits.lstrip("0") or "0"
+        return prefix + normalized_digits
+    
+    return None
 
 
 def parse_dt(val):
@@ -127,13 +175,11 @@ def parse_dt(val):
             pass
     return None
 
-
 def day_gap(d1, d2):
     a, b = parse_dt(d1), parse_dt(d2)
     if a is None or b is None:
         return None
-    return abs((b - a).days)
-
+    return abs((b.date() - a.date()).days)
 
 def is_valid(val):
     if val is None:
@@ -153,40 +199,44 @@ def is_valid(val):
 def extract_and_validate(row_list):
     """
     Returns:
-        "reject"  — count(FlightNumber) > count(DepartureDateLocal)  [Rule 1]
         flights   — list of (FlightNumber, DepartureDateLocal) tuples [Rule 2]
         airports  — list of airport strings                            [Rule 3]
+        cnt_no    — count of flights
+        is_reject — boolean indicating if row should be rejected      [Rule 1]
     """
     flight_nos = []
     for i in range(MAX_FLIGHTS):
-        v = row_list[COL_IDX[f"FlightNumber{i + 1}"]]  # ← was FlightNo{i+1}
+        v = row_list[COL_IDX[f"FlightNumber{i + 1}"]]
         if is_valid(v):
-            flight_nos.append(v.strip() if isinstance(v, str) else str(v))
+            flight_nos.append(str(v).strip())
 
     flight_dates = []
     for i in range(MAX_DATES):
-        v = row_list[COL_IDX[f"DepartureDateLocal{i + 1}"]]  # ← was FlightDate{i+1}
+        v = row_list[COL_IDX[f"DepartureDateLocal{i + 1}"]]
         if is_valid(v):
-            flight_dates.append(v.strip() if isinstance(v, str) else str(v))
+            flight_dates.append(str(v).strip())
 
     cnt_no = len(flight_nos)
     cnt_date = len(flight_dates)
 
+    # Rule 1: reject if more flights than dates
     if cnt_no > cnt_date:
-        return "reject", None, None
+        return None, None, cnt_no, True
 
+    # Rule 2: trim dates to match flight count
     trimmed_dates = flight_dates[:cnt_no]
     flights = list(zip(flight_nos, trimmed_dates))
 
+    # Rule 3: trim airports to flight count + 1
     all_airports = []
     for i in range(MAX_AIRPORTS):
         v = row_list[COL_IDX[f"Airport{i + 1}"]]
         if is_valid(v):
-            all_airports.append(v.strip() if isinstance(v, str) else str(v))
+            all_airports.append(str(v).strip())
 
-    airports = all_airports[: cnt_no + 1]
+    airports = all_airports[:cnt_no + 1] if cnt_no > 0 else []
 
-    return flights, airports, cnt_no
+    return flights, airports, cnt_no, False
 
 
 # ============================================================================
@@ -216,8 +266,8 @@ def build_child_row(parent_list, flights_slice, airports_slice, parent_id):
         child[COL_IDX[c]] = None
 
     for i, (fn, fd) in enumerate(flights_slice):
-        child[COL_IDX[f"FlightNumber{i + 1}"]] = fn  # ← was FlightNo{i+1}
-        child[COL_IDX[f"DepartureDateLocal{i + 1}"]] = fd  # ← was FlightDate{i+1}
+        child[COL_IDX[f"FlightNumber{i + 1}"]] = fn
+        child[COL_IDX[f"DepartureDateLocal{i + 1}"]] = fd
 
     for i, ap in enumerate(airports_slice):
         child[COL_IDX[f"Airport{i + 1}"]] = ap
@@ -246,29 +296,37 @@ def process_batch(rows_df, all_cols):
         row_dict = normalize_flight_numbers(row_dict)
         row_list = [row_dict[c] for c in all_cols]
 
-        result, airports, cnt_no = extract_and_validate(row_list)
+        flights, airports, cnt_no, is_reject = extract_and_validate(row_list)
 
-        if result == "reject":
+        # Rule 1: reject if more flights than dates
+        if is_reject:
             rejection_rows.append(list(row_list))
             continue
 
-        flights = result
+        # If no flights, skip (shouldn't happen with valid data)
+        if cnt_no == 0:
+            continue
 
+        # Create trimmed row with only valid flights/dates/airports
         trimmed_row = list(row_list)
         for c in DYNAMIC_COLS:
             trimmed_row[COL_IDX[c]] = None
+            
         for i, (fn, fd) in enumerate(flights):
-            trimmed_row[COL_IDX[f"FlightNumber{i + 1}"]] = fn  # ← was FlightNo
-            trimmed_row[COL_IDX[f"DepartureDateLocal{i + 1}"]] = fd  # ← was FlightDate
+            trimmed_row[COL_IDX[f"FlightNumber{i + 1}"]] = fn
+            trimmed_row[COL_IDX[f"DepartureDateLocal{i + 1}"]] = fd
+            
         for i, ap in enumerate(airports):
             trimmed_row[COL_IDX[f"Airport{i + 1}"]] = ap
 
+        # Rule 4: check for splits
         split_points = find_split_points(flights)
 
         if not split_points:
             unsplit_rows.append(trimmed_row)
             continue
 
+        # Split the row
         parent_id = row_list[COL_IDX["id"]]
         boundaries = [0] + split_points + [len(flights)]
 
@@ -279,7 +337,7 @@ def process_batch(rows_df, all_cols):
             a_end = f_end + 1
 
             seg_flights = flights[f_start:f_end]
-            seg_airports = airports[a_start : min(a_end, len(airports))]
+            seg_airports = airports[a_start:min(a_end, len(airports))]
 
             if not seg_flights:
                 continue
