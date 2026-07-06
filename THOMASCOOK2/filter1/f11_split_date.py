@@ -25,28 +25,28 @@ from datetime import datetime
 # ============================================================================
 
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
-SOURCE_TABLE = "TBO_SPLIT"
-TARGET_TABLE = "TBO_SPLIT2"
-REJECT_TABLE = "TBO_REJECTION"
+SOURCE_TABLE = "THOMASCOOK_RAW"
+TARGET_TABLE = "THOMASCOOK_SPLIT"
+REJECT_TABLE = "THOMASCOOK_REJECT"
 
-MAX_FLIGHTS = 7
-MAX_DATES = 7
-MAX_AIRPORTS = 8
+MAX_FLIGHTS = 13
+MAX_DATES = 13
+MAX_AIRPORTS = 14
 
 BATCH_SIZE = 200_000
 
-FLIGHT_PREFIX = "FlightNumber"
-DATE_PREFIX = "DepartureDateLocal"
+FLIGHT_PREFIX = "FlightNo"
+DATE_PREFIX = "DepartureDate"
 
 # ============================================================================
-# COLUMN LISTS  —  match TBO_RAW schema exactly
+# COLUMN LISTS  —  match THOMASCOOK_RAW schema exactly
 # ============================================================================
 
-FLIGHT_COLS = [f"{FLIGHT_PREFIX}{i + 1}" for i in range(MAX_FLIGHTS)]  # FlightNumber1..7
+FLIGHT_COLS = [f"{FLIGHT_PREFIX}{i + 1}" for i in range(MAX_FLIGHTS)]  # FlightNumber1..13
 DATE_COLS = [
     f"{DATE_PREFIX}{i + 1}" for i in range(MAX_DATES)
-]  # DepartureDateLocal1..7
-AIRPORT_COLS = [f"Airport{i + 1}" for i in range(MAX_AIRPORTS)]  # Airport1..8
+]  # DepartureDate1..13
+AIRPORT_COLS = [f"Airport{i + 1}" for i in range(MAX_AIRPORTS)]  # Airport1..14
 DYNAMIC_COLS = FLIGHT_COLS + DATE_COLS + AIRPORT_COLS
 
 _RE_FLTNO = re.compile(r"^[A-Z]{2,3}\d+$")  # Fixed: only letters, not alphanumeric
@@ -54,12 +54,15 @@ _RE_SCI_NOTATION = re.compile(r"^(\d+)(?:\.0+)?E\+?(\d+)$", re.IGNORECASE)
 _RE_FLTNO_WITH_SPACE = re.compile(r"^([A-Z]{1,3})\s+(\d+)$", re.IGNORECASE)  # Handle "G 217", "K 1475"
 
 STATIC_COLS = [
-    "PaxName",
-    "BookingRef",
-    "ETicketNo",
-    "ClientCode",
-    "Airline",
-    "JourneyType",
+    "COMPANY",
+    "AIRLINE_PNR",
+    "GDS_PNR",
+    "TICKET_NO",
+    "INVOICE_REFUNDID",
+    "GROUP_NAME",
+    "AIRLINE_CODE",
+    "AIRLINE_NAME",
+    "STATUS",
 ]
 
 COL_IDX: dict = {}
@@ -198,14 +201,14 @@ def is_valid(val):
 # RULE 1 & 2: count flights vs dates, then trim
 # ============================================================================
 
-
 def extract_and_validate(row_list):
     """
     Returns:
-        flights   — list of (FlightNumber, DepartureDateLocal) tuples [Rule 2]
+        flights   — list of (FlightNo, DepartureDate) tuples [Rule 2]
         airports  — list of airport strings                            [Rule 3]
         cnt_no    — count of flights
         is_reject — boolean indicating if row should be rejected      [Rule 1]
+        reject_reason — reason string if rejected, else None
     """
     flight_nos = []
     for i in range(MAX_FLIGHTS):
@@ -224,7 +227,7 @@ def extract_and_validate(row_list):
 
     # Rule 1: reject if more flights than dates
     if cnt_no > cnt_date:
-        return None, None, cnt_no, True
+        return None, None, cnt_no, True, f"ROUTE_OVERFLOW: {cnt_no} flights > {cnt_date} dates"
 
     # Rule 2: trim dates to match flight count
     trimmed_dates = flight_dates[:cnt_no]
@@ -239,7 +242,11 @@ def extract_and_validate(row_list):
 
     airports = all_airports[:cnt_no + 1] if cnt_no > 0 else []
 
-    return flights, airports, cnt_no, False
+    # NEW: Reject if no flight numbers at all (but dates/airports may exist)
+    if cnt_no == 0:
+        return None, None, 0, True, "NO_VALID_FLIGHT_NUMBERS"
+
+    return flights, airports, cnt_no, False, None
 
 
 # ============================================================================
@@ -290,6 +297,7 @@ def process_batch(rows_df, all_cols):
     unsplit_rows = []
     child_rows = []
     rejection_rows = []
+    rejection_reasons = []  # NEW: parallel list for reasons
 
     records = rows_df.values.tolist()
 
@@ -299,15 +307,12 @@ def process_batch(rows_df, all_cols):
         row_dict = normalize_flight_numbers(row_dict)
         row_list = [row_dict[c] for c in all_cols]
 
-        flights, airports, cnt_no, is_reject = extract_and_validate(row_list)
+        flights, airports, cnt_no, is_reject, reject_reason = extract_and_validate(row_list)
 
-        # Rule 1: reject if more flights than dates
+        # Rule 1 (or no flights): reject
         if is_reject:
             rejection_rows.append(list(row_list))
-            continue
-
-        # If no flights, skip (shouldn't happen with valid data)
-        if cnt_no == 0:
+            rejection_reasons.append(reject_reason)  # NEW
             continue
 
         # Create trimmed row with only valid flights/dates/airports
@@ -352,12 +357,15 @@ def process_batch(rows_df, all_cols):
     empty = pd.DataFrame(columns=all_cols)
     unsplit_df = pd.DataFrame(unsplit_rows, columns=all_cols) if unsplit_rows else empty
     children_df = pd.DataFrame(child_rows, columns=all_cols) if child_rows else empty
-    rejection_df = (
-        pd.DataFrame(rejection_rows, columns=all_cols) if rejection_rows else empty
-    )
+    
+    # NEW: Build rejection_df with reasons
+    if rejection_rows:
+        rejection_df = pd.DataFrame(rejection_rows, columns=all_cols)
+        rejection_df["RejectionReason"] = rejection_reasons
+    else:
+        rejection_df = pd.DataFrame(columns=all_cols + ["RejectionReason"])
 
     return unsplit_df, children_df, rejection_df
-
 
 # ============================================================================
 # DB HELPERS
@@ -392,8 +400,8 @@ def ensure_rejection_table(con, source_table, reject_table):
     con.execute(
         f'CREATE TABLE "{reject_table}" AS SELECT * FROM "{source_table}" WHERE 1=0'
     )
-    print(f"  Recreated table '{reject_table}'.")
-
+    con.execute(f'ALTER TABLE "{reject_table}" ADD COLUMN "RejectionReason" VARCHAR')
+    print(f"  Recreated table '{reject_table}' with RejectionReason column.")
 
 # ============================================================================
 # MAIN
@@ -451,11 +459,12 @@ def process_table(db_path=DB_PATH, table=SOURCE_TABLE, batch_size=BATCH_SIZE):
             split_count += children_df["ParentId"].nunique()
 
         if not rejection_df.empty:
+            rej_cols = all_cols + ["RejectionReason"]
+            rej_col_list = ", ".join(f'"{c}"' for c in rej_cols)
             con.execute(
-                f'INSERT INTO "{REJECT_TABLE}" ({col_list}) SELECT * FROM rejection_df'
+                f'INSERT INTO "{REJECT_TABLE}" ({rej_col_list}) SELECT * FROM rejection_df'
             )
             reject_count += len(rejection_df)
-
         elapsed = time.time() - t0
         scanned = unsplit_total + split_count + reject_count
         rate = scanned / elapsed if elapsed > 0 else 0
