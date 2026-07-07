@@ -169,23 +169,44 @@ def _normalize_any_flightno(fn: str) -> str:
 
 
 def parse_dt(val):
+    """
+    Robustly parse datetime strings. 
+    Handles formats like '2019-01-01 - 00:45' by extracting the YYYY-MM-DD prefix.
+    """
     if val is None:
         return None
     if isinstance(val, datetime):
         return val
-    s = str(val).strip()[:19]
-    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+    
+    s = str(val).strip()
+    if not s:
+        return None
+
+    # 1. Extract YYYY-MM-DD using regex to handle formats like "2019-01-01 - 00:45"
+    m = re.match(r"(\d{4}-\d{2}-\d{2})", s)
+    if m:
         try:
-            return datetime.strptime(s, fmt)
+            return datetime.strptime(m.group(1), "%Y-%m-%d")
         except ValueError:
             pass
+
+    # 2. Fallback for other standard formats
+    s_trimmed = s[:19]
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%Y-%m-%d - %H:%M"):
+        try:
+            return datetime.strptime(s_trimmed, fmt)
+        except ValueError:
+            pass
+            
     return None
+
 
 def day_gap(d1, d2):
     a, b = parse_dt(d1), parse_dt(d2)
     if a is None or b is None:
         return None
     return abs((b.date() - a.date()).days)
+
 
 def is_valid(val):
     if val is None:
@@ -465,6 +486,7 @@ def process_table(db_path=DB_PATH, table=SOURCE_TABLE, batch_size=BATCH_SIZE):
                 f'INSERT INTO "{REJECT_TABLE}" ({rej_col_list}) SELECT * FROM rejection_df'
             )
             reject_count += len(rejection_df)
+            
         elapsed = time.time() - t0
         scanned = unsplit_total + split_count + reject_count
         rate = scanned / elapsed if elapsed > 0 else 0

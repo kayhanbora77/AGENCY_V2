@@ -2,7 +2,7 @@ import duckdb
 import os
 import time
 import pandas as pd
-
+import math
 # ============================================================================
 # CONFIG
 # ============================================================================
@@ -41,19 +41,33 @@ def ensure_table_like(con, source_table, target_table):
 # DUPLICATE AIRPORT CHECK (Python logic)
 # ============================================================================
 
+def is_empty_value(val):
+    """Check if a value is NULL, NaN, empty string, or pandas NA."""
+    if val is None:
+        return True
+    if isinstance(val, float) and math.isnan(val):
+        return True
+    val_str = str(val).strip()
+    if val_str == "":
+        return True
+    # Handle pandas NA and similar
+    if val_str.lower() in ("none", "nan", "<na>", "nat", "null"):
+        return True
+    return False
+
+
 def has_duplicate_airports(row_dict):
-    """
-    Check if any two non-null airport columns in the same row have the same value.
-    """
     airports = []
     for i in range(1, MAX_AIRPORTS + 1):
         col = f"Airport{i}"
         val = row_dict.get(col)
-        if val is not None and str(val).strip() != "":
-            airports.append(str(val).strip().upper())
+        
+        if is_empty_value(val):
+            continue
+            
+        airports.append(str(val).strip().upper())
 
     return len(airports) != len(set(airports))
-
 
 # ============================================================================
 # MAIN
