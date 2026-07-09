@@ -34,6 +34,7 @@ TR_CARRIERS = frozenset({"TK", "PC", "FH", "XQ", "VF"})
 UK_CARRIERS = frozenset({"BA", "VS"})
 SRB_CARRIERS = frozenset({"JU"})
 SRB_AIRPORTS = frozenset({"BEG", "INI", "KVO"})
+SPECIAL_CARRIERS = frozenset({"LH","XQ","QR"})
 
 TARGET_COLUMNS = [
     "ConnectionID",
@@ -319,7 +320,7 @@ class ChunkProcessor:
                 "GMTArrival": self._gmt_offsets_vectorized(
                     sub[ap_to].astype(str).str.strip().str.upper(), dates
                 ).values,
-                "AirlineCode": sub["Airline"]
+                "AirlineCode": sub["AirlineCode"]
                 .astype(str)
                 .str.strip()
                 .str.upper()
@@ -393,6 +394,8 @@ class ChunkProcessor:
         to_is_eu = to_ap.isin(self.eu_airports)
         is_special = airline.isin(SPECIAL_NON_EU_CARRIERS)
         is_eu_carrier = airline.isin(self.eu_carriers)
+        from_is_tr = from_ap.isin(self.tr_airports)        
+        is_special_from_tr = airline.isin(SPECIAL_CARRIERS)
 
         grp_uid = df[uid_col]
 
@@ -439,14 +442,19 @@ class ChunkProcessor:
         cond_2_1 = (~from_is_eu) & (~to_is_eu)   # NonEU -> NonEU
         cond_2_2 = (~from_is_eu) & to_is_eu      # NonEU -> EU
         cond_2_3 = from_is_eu                     # EU -> EU or NonEU
+        # New carve-out: LH/XQ/QR departing from Turkey
+        #   - single-flight journeys: the (only) leg qualifies directly
+        #   - multi-leg journeys: only the first leg (LegNo == 1) qualifies
+        is_first_leg = df["LegNo"] == 1
+        cond_2_4 = from_is_tr & is_special_from_tr & (~is_multi)              # single-flight
+        cond_2_5 = from_is_tr & is_special_from_tr & is_multi & is_first_leg  # multi-leg, leg 1 only
+
 
         rule2_leg_eligible.loc[cond_2_1] = is_special.loc[cond_2_1]
         rule2_leg_eligible.loc[cond_2_2] = (is_special | is_eu_carrier).loc[cond_2_2]
         rule2_leg_eligible.loc[cond_2_3] = True
-
-        # fold in TR-SHY and Serbian carve-outs as additional per-leg eligibility triggers
-        rule2_leg_eligible = rule2_leg_eligible | tr_leg_eligible | srb_leg_eligible
-
+        # fold in TR-SHY, Serbian, and LH/XQ/QR-from-Turkey carve-outs as additional per-leg triggers
+        rule2_leg_eligible = rule2_leg_eligible | tr_leg_eligible | srb_leg_eligible | cond_2_4 | cond_2_5
         # roll up leg-level rule2 result to the journey: any eligible leg -> journey eligible
         rule2_journey_eligible = rule2_leg_eligible.groupby(grp_uid, sort=False).transform("any")
 
