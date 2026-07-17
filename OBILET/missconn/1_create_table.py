@@ -34,7 +34,10 @@ SELECT
     AS VARCHAR)                                       AS FlightNumber,
     
     CAST(src.DepartureDate AS VARCHAR)              AS DepartureDate,
+    CAST(src.FromAirport AS VARCHAR)                AS FromAirport,
+    CAST(src.ToAirport AS VARCHAR)                  AS ToAirport,
     CAST(src.LegNo AS INTEGER)                      AS LegNo,
+    CAST(src.LastLegAirport AS VARCHAR)             AS LastLegAirport,
     TRY_CAST(src.EUEligible AS INTEGER)             AS EUEligible,
     CAST(src.AirlineCode AS VARCHAR)                AS AirlineCode,
 
