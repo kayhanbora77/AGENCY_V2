@@ -35,8 +35,8 @@ import pandas as pd
 # ============================================================================
 
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
-SOURCE_TABLE = "TRIPJACK_SPLIT9"  # input  table (read-only)
-TARGET_TABLE = "TRIPJACK_SPLIT10"  # output table for clean / passing rows
+SOURCE_TABLE = "TRIPJACK_SPLIT11"  # input  table (read-only)
+TARGET_TABLE = "TRIPJACK_CLEANED"  # output table for clean / passing rows
 REJECTION_TABLE = "TRIPJACK_REJECT"  # output table for rejected rows
 
 MAX_FLIGHTS = 5

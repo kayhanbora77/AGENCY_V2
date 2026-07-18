@@ -5,7 +5,7 @@ import duckdb
 # =====================================================
 CSV_FILE = r"C:\Users\cagri\Desktop\Generated_Data\MMT\MissConnection2\MissConnection2.csv"
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
-TABLE_NAME = "MMT_MISSCONNECTION_2"
+TABLE_NAME = "MMT_MISSCONNECTION_VARFFLIGHT"
 
 con = duckdb.connect(str(DB_PATH))
 
