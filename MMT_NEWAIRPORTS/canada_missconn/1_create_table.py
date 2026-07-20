@@ -1,9 +1,6 @@
 import duckdb
 
-# =====================================================
-# CONFIG
-# =====================================================
-CSV_FILE = r"C:\Users\cagri\Desktop\Generated_Data\MMT\MMT_CANADA_MISSCONNECTION.csv"
+CSV_FILE = r"C:\Users\cagri\Desktop\MMT\MMT_VARIFLIGHT\CANADA_MISSCONN.csv"
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
 TABLE_NAME = "MMT_CANADA_MISSCONNECTION"
 
@@ -14,6 +11,7 @@ CREATE OR REPLACE TABLE {TABLE_NAME} AS
 SELECT
     CAST(src.Id AS VARCHAR)                         AS Id,
     CAST(src.ConnectionID AS VARCHAR)               AS ConnectionID,
+    CAST(src.BookingRef AS VARCHAR)                 AS BookingRef,
     
     -- Clean FlightNumber: remove trailing zeros, decimal point, and + sign from exponent
     CAST(
@@ -33,7 +31,10 @@ SELECT
     AS VARCHAR)                                       AS FlightNumber,
     
     CAST(src.DepartureDate AS VARCHAR)              AS DepartureDate,
+    CAST(src.FromAirport AS VARCHAR)                AS FromAirport,
+    CAST(src.ToAirport AS VARCHAR)                  AS ToAirport,    
     CAST(src.LegNo AS INTEGER)                      AS LegNo,
+    CAST(src.LastLegAirport AS VARCHAR)             AS LastLegAirport,
     TRY_CAST(src.EUEligible AS INTEGER)             AS EUEligible,
     CAST(src.AirlineCode AS VARCHAR)                AS AirlineCode,
 

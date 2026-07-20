@@ -7,12 +7,18 @@ DB_PATH = r"C:\DuckDB\my_db.duckdb"
 SOURCE_TABLE = "MMT_SHY_MISSCONNECTION"
 MIN_LAYOVER_MINUTES = 60
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+)
 logger = logging.getLogger(__name__)
 
 DATETIME_COLS = [
-    "DepartureDate", "FlightDate", "ScheduledDepartureTime",
-    "ScheduledArrivalTime", "ActualDepartureTime", "ActualArrivalTime",
+    "DepartureDate",
+    "FlightDate",
+    "ScheduledDepartureTime",
+    "ScheduledArrivalTime",
+    "ActualDepartureTime",
+    "ActualArrivalTime",
 ]
 
 
@@ -42,7 +48,7 @@ def set_missconnection(group: pd.DataFrame) -> pd.DataFrame:
     # Check if ANY leg in THIS group is cancelled, diverted, or delayed
     if "Status" in group.columns:
         statuses = group["Status"].astype(str).str.lower()
-        if statuses.str.startswith(("cancel", "divert", "delay")).any():            
+        if statuses.str.startswith(("cancel", "divert", "delay")).any():
             logger.debug("Skipping connection group due to bad status")
             return group
 
@@ -87,7 +93,9 @@ def update_missconnection(processed_df: pd.DataFrame) -> None:
     logger.info("Updating %d rows in database...", len(updates))
 
     with duckdb.connect(DB_PATH) as con:
-        con.execute("CREATE OR REPLACE TEMP TABLE _miss_updates AS SELECT * FROM updates")
+        con.execute(
+            "CREATE OR REPLACE TEMP TABLE _miss_updates AS SELECT * FROM updates"
+        )
         con.execute(f"""
             UPDATE {SOURCE_TABLE} AS t
             SET 
