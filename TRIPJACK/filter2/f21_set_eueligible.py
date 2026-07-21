@@ -21,7 +21,7 @@ class Config:
     threads: int = 8
     memory_limit: str = "8GB"
     temp_dir: str = r"C:\DuckDB\temp"
-    source_table: str = "TRIPJACK_SPLITXXX"
+    source_table: str = "TRIPJACK_CLEANED"
     target_table: str = "TA_STANDARD_TRIPJACK"
     read_chunk: int = 200_000
     parse_workers: int = 4
@@ -267,6 +267,7 @@ class ChunkProcessor:
         fd_col = f"DepartureDateLocal{leg_num}"
         ap_from = f"AirportIataCode{leg_num}"
         ap_to = f"AirportIataCode{leg_num + 1}"
+        al_col = f"Airline{leg_num}"   # <-- per-leg airline column
 
         # Check if columns exist (you have up to 6 flights)
         if fn_col not in df.columns or fd_col not in df.columns:
@@ -291,7 +292,6 @@ class ChunkProcessor:
             return None
 
         # Parse dates - your dates might already be in proper format
-        # Try to convert to datetime, if it fails, keep as string
         try:
             dates = pd.to_datetime(sub[fd_col], errors="coerce")
             valid_date_mask = dates.notna()
@@ -300,8 +300,20 @@ class ChunkProcessor:
             if sub.empty:
                 return None
         except:
-            # If date conversion fails, use as-is (might already be datetime)
             dates = sub[fd_col]
+
+        # --- Per-leg airline resolution ---
+        if al_col in sub.columns:
+            leg_airline = sub[al_col].astype(str).str.strip().str.upper()
+            # Fallback: if Airline{n} is blank/NaN for a row, derive it from the
+            # flight number's alpha prefix (e.g. "QR677" -> "QR")
+            blank_mask = leg_airline.isin(["", "NAN", "NONE"]) | sub[al_col].isna()
+            if blank_mask.any():
+                derived = clean_flight.loc[sub.index].str.extract(r"^([A-Z]{2,3})")[0]
+                leg_airline.loc[blank_mask] = derived.loc[blank_mask]
+        else:
+            # Column missing entirely for this leg number -> derive from flight number
+            leg_airline = clean_flight.loc[sub.index].str.extract(r"^([A-Z]{2,3})")[0]
 
         # Create the leg dataframe
         return pd.DataFrame(
@@ -320,29 +332,17 @@ class ChunkProcessor:
                 "GMTArrival": self._gmt_offsets_vectorized(
                     sub[ap_to].astype(str).str.strip().str.upper(), dates
                 ).values,
-                "AirlineCode": sub["AirlineCode"]
-                .astype(str)
-                .str.strip()
-                .str.upper()
-                .values,
+                "AirlineCode": leg_airline.values,   # <-- per-leg airline, not the shared column
                 "PaxName": sub["PaxName"].fillna("").astype(str).str.strip().values,
-                "ETicketNo": sub["ETicketNo"]
-                .fillna("")
-                .astype(str)
-                .str.strip()
-                .values,  # Changed from TDNR to ETicketNo
-                "BookingRef": sub["BookingRef"]
-                .fillna("")
-                .astype(str)
-                .str.strip()
-                .values,  # Changed from PNRR to BookingRef
+                "ETicketNo": sub["ETicketNo"].fillna("").astype(str).str.strip().values,
+                "BookingRef": sub["BookingRef"].fillna("").astype(str).str.strip().values,
                 "FileName": sub.get("_SourceFile", pd.Series([""] * len(sub)))
                 .fillna("")
                 .astype(str)
                 .str.strip()
                 .values,
             }
-        )
+    )
     
     # ============================================
     """

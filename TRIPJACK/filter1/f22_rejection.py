@@ -46,7 +46,7 @@ BATCH_SIZE = 200_000
 DATE_YEAR_MIN = 2015
 DATE_YEAR_MAX = 2030
 
-AIRLINE_ALPHA_COL = "Airline"  # set to None to skip airline validation
+AIRLINE_COL_PREFIX = "Airline"  # column prefix -> Airline1..Airline{MAX_FLIGHTS}; set to None to skip
 
 _RE_SCI_NOTATION = re.compile(r"^(\d+)(?:\.0+)?E\+?(\d+)$", re.IGNORECASE)
 
@@ -394,17 +394,22 @@ def check_flightdate_format_and_range(row):
         return True, "; ".join(reasons)
     return False, None
 
-
 def check_airline_code(row):
-    if AIRLINE_ALPHA_COL is None:
+    if AIRLINE_COL_PREFIX is None:
         return False, None
 
-    ac = row.get(AIRLINE_ALPHA_COL)
-    if _isna(ac):
-        return False, None
-    ac_str = str(ac).strip()
-    if not _RE_AIRLINECODE_23.fullmatch(ac_str):
-        return True, f"{Reason.AC_BAD_FORMAT} col={AIRLINE_ALPHA_COL!r} val={ac_str!r}"
+    reasons = []
+    for i in range(1, MAX_FLIGHTS + 1):
+        col = f"{AIRLINE_COL_PREFIX}{i}"
+        ac = row.get(col)
+        if _isna(ac):
+            continue
+        ac_str = str(ac).strip()
+        if not _RE_AIRLINECODE_23.fullmatch(ac_str):
+            reasons.append(f"Slot{i}: {Reason.AC_BAD_FORMAT} col={col!r} val={ac_str!r}")
+
+    if reasons:
+        return True, "; ".join(reasons)
     return False, None
 
 
@@ -445,16 +450,17 @@ def normalize_flight_numbers(row: dict) -> dict:
 def _sanitize_col(col: str) -> str:
     return col.strip().replace('"', '""')
 
-
 def ensure_rejection_table(con, source_cols: list[str], rejection_table: str):
-    """Create rejection table only if it doesn't exist."""
+    """Create rejection table if missing; otherwise add any source columns
+    (or RejectionReason) that don't exist yet, so schema drift in the
+    source table doesn't break inserts."""
     exists = con.execute(f"""
         SELECT COUNT(*) FROM information_schema.tables 
         WHERE table_name = '{rejection_table}'
     """).fetchone()[0]
 
     if exists:
-        cols = {
+        existing_cols = {
             r[0]
             for r in con.execute(f"""
             SELECT column_name FROM information_schema.columns 
@@ -462,13 +468,22 @@ def ensure_rejection_table(con, source_cols: list[str], rejection_table: str):
         """).fetchall()
         }
 
-        if "RejectionReason" not in cols:
+        missing = [c for c in source_cols if c not in existing_cols]
+        for c in missing:
+            con.execute(
+                f'ALTER TABLE "{rejection_table}" ADD COLUMN "{_sanitize_col(c)}" VARCHAR'
+            )
+        if missing:
+            print(f"  Added {len(missing)} missing column(s) to {rejection_table}: {missing}")
+
+        if "RejectionReason" not in existing_cols:
             con.execute(
                 f'ALTER TABLE "{rejection_table}" ADD COLUMN "RejectionReason" VARCHAR'
             )
             print(f"  Added RejectionReason column to {rejection_table}.")
-        else:
-            print(f"  Rejection table '{rejection_table}' already exists.")
+
+        if not missing and "RejectionReason" in existing_cols:
+            print(f"  Rejection table '{rejection_table}' already exists and is up to date.")
         return
 
     col_defs = ", ".join(f'"{_sanitize_col(c)}" VARCHAR' for c in source_cols)
