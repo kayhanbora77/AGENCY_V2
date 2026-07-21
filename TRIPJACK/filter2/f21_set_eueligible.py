@@ -265,8 +265,8 @@ class ChunkProcessor:
         # Map your actual column names
         fn_col = f"FlightNumber{leg_num}"
         fd_col = f"DepartureDateLocal{leg_num}"
-        ap_from = f"AirportIataCode{leg_num}"
-        ap_to = f"AirportIataCode{leg_num + 1}"
+        ap_from = f"AirportIATACode{leg_num}"
+        ap_to = f"AirportIATACode{leg_num + 1}"
         al_col = f"Airline{leg_num}"   # <-- per-leg airline column
 
         # Check if columns exist (you have up to 6 flights)
@@ -335,7 +335,7 @@ class ChunkProcessor:
                 "AirlineCode": leg_airline.values,   # <-- per-leg airline, not the shared column
                 "PaxName": sub["PaxName"].fillna("").astype(str).str.strip().values,
                 "ETicketNo": sub["ETicketNo"].fillna("").astype(str).str.strip().values,
-                "BookingRef": sub["BookingRef"].fillna("").astype(str).str.strip().values,
+                "BookingRef": sub["BookingIdTemporary"].fillna("").astype(str).str.strip().values,
                 "FileName": sub.get("_SourceFile", pd.Series([""] * len(sub)))
                 .fillna("")
                 .astype(str)
@@ -344,7 +344,65 @@ class ChunkProcessor:
             }
     )
     
+        """
+    Determines journey eligibility using a fully vectorized, priority-based
+    rule engine.
 
+    Processing Logic
+    ----------------
+    Eligibility is evaluated at the journey (ConnectionID) level, meaning
+    every flight leg belonging to the same journey receives the same final
+    eligibility result.
+
+    Journey Definitions
+    -------------------
+    FirstLegAirport
+        Departure airport of the first flight leg (lowest LegNo).
+
+    LastLegAirport
+        Arrival airport of the final flight leg (highest LegNo).
+        This value is precomputed in process() and merged into the dataframe.
+
+    Airline1
+        Operating airline of the first flight leg.
+
+    Rule Priority (Highest → Lowest)
+    --------------------------------
+    Rule 1 (Highest)
+        If the journey starts in Turkey (TR) and ends in Turkey (TR),
+        the journey is NOT eligible.
+
+    Rule 2
+        If the journey starts in Turkey (TR) and the first operating carrier
+        (Airline1) is one of the SPECIAL_CARRIERS (LH, XQ, QR),
+        the journey IS eligible.
+
+    Rule 3
+        If ANY flight leg is operated by a SPECIAL_NON_EU_CARRIER,
+        the journey IS eligible.
+
+    Rule 4
+        If both the first departure airport and final arrival airport are
+        outside the EU, the journey is NOT eligible.
+
+    Rule 5 (Lowest)
+        If the journey starts from an EU airport,
+        the journey IS eligible.
+
+    Rule 6 (Safety Rule)
+        If any leg within a ConnectionID is determined to be eligible,
+        every leg in that journey is marked eligible.
+
+    Rule Application
+    ----------------
+    Rules are applied from lowest priority to highest using Series.mask().
+    Higher-priority rules overwrite the results of lower-priority rules.
+
+        Rule5 → Rule4 → Rule3 → Rule2 → Rule1
+
+    This guarantees Rule 1 has the final decision whenever multiple rules
+    match the same journey.
+    """
     def _vectorized_eligibility(self, df: pd.DataFrame) -> pd.Series:
         """
         New rule set (priority Rule1 > Rule2 > Rule3 > Rule4 > Rule5 > Rule6).
