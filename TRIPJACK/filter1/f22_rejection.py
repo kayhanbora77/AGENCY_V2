@@ -96,6 +96,7 @@ class Reason(str, Enum):
     AC_BAD_FORMAT = "AirlineCode BAD_FORMAT"
     AP_BAD_FORMAT = "Airport BAD_FORMAT"
     FN_CONSECUTIVE_DUPLICATE = "FlightNumber CONSECUTIVE_DUPLICATE"
+    DT_OUT_OF_ORDER = "DepartureDateLocal OUT_OF_ORDER"
 
 
 # ============================================================================
@@ -148,6 +149,39 @@ def check_consecutive_duplicate_flightno(row):
                 f"Slot{i}/Slot{i + 1}: {Reason.FN_CONSECUTIVE_DUPLICATE} "
                 f"(FlightNumber{i}={fn_a_str!r} == FlightNumber{i + 1}={fn_b_str!r})"
             )
+
+    if reasons:
+        return True, "; ".join(reasons)
+    return False, None
+
+
+def check_date_chronology(row):
+    """Reject if a later slot's DepartureDateLocal is earlier than an
+    earlier slot's DepartureDateLocal (dates must be non-decreasing across
+    consecutive filled slots, e.g. DepartureDateLocal2 must not be
+    earlier than DepartureDateLocal1)."""
+    reasons = []
+    prev_idx = None
+    prev_dt = None
+
+    for i in range(1, MAX_FLIGHTS + 1):
+        dt_raw = row.get(f"DepartureDateLocal{i}")
+        if _isna(dt_raw):
+            continue
+
+        dt_parsed = _parse_date(dt_raw)
+        if dt_parsed is None:
+            # Unparseable dates are handled by check_flightdate_format_and_range
+            continue
+
+        if prev_dt is not None and dt_parsed < prev_dt:
+            reasons.append(
+                f"Slot{prev_idx}->Slot{i}: {Reason.DT_OUT_OF_ORDER} "
+                f"(DepartureDateLocal{i}={dt_parsed} < DepartureDateLocal{prev_idx}={prev_dt})"
+            )
+
+        prev_idx = i
+        prev_dt = dt_parsed
 
     if reasons:
         return True, "; ".join(reasons)
@@ -491,6 +525,7 @@ _CHECKS = [
     check_consecutive_duplicate_flightno,
     check_route_overflow,
     check_flightdate_format_and_range,
+    check_date_chronology,
     check_airline_code,
     check_airport,
 ]
