@@ -3,7 +3,7 @@ import duckdb
 # =====================================================
 # CONFIG
 # =====================================================
-CSV_FILE = r"C:\Users\cagri\Desktop\TBO\TBO_MissConn.csv"
+CSV_FILE = r"C:\Users\cagri\Desktop\TBO\V2\TBO_MissConn2.csv"
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
 TABLE_NAME = "TBO_MISSCONNECTION"
 
@@ -14,6 +14,9 @@ CREATE OR REPLACE TABLE {TABLE_NAME} AS
 SELECT
     CAST(src.Id AS VARCHAR)                         AS Id,
     CAST(src.ConnectionID AS VARCHAR)               AS ConnectionID,
+    CAST(src.PaxName AS VARCHAR)                    AS PaxName,
+    CAST(src.BookingRef AS VARCHAR)                 AS BookingRef,
+    CAST(src.ETicketNo AS VARCHAR)                  AS ETicketNo,
     
     -- Clean FlightNumber: remove trailing zeros, decimal point, and + sign from exponent
     CAST(
@@ -29,11 +32,14 @@ SELECT
                 'E\+0*', 'E'                          -- Remove + and leading zeros: E+032 -> E32
             ),
             'E\-0*', 'E-'                             -- Handle negative: E-032 -> E-32
-        )
+        ) 
     AS VARCHAR)                                       AS FlightNumber,
     
     CAST(src.DepartureDate AS VARCHAR)              AS DepartureDate,
+    CAST(src.FromAirport AS VARCHAR)                AS FromAirport,
+    CAST(src.ToAirport AS VARCHAR)                  AS ToAirport,
     CAST(src.LegNo AS INTEGER)                      AS LegNo,
+    CAST(src.LastLegAirport AS VARCHAR)             AS LastLegAirport,
     TRY_CAST(src.EUEligible AS INTEGER)             AS EUEligible,
     CAST(src.AirlineCode AS VARCHAR)                AS AirlineCode,
 
@@ -86,13 +92,13 @@ print(f"Table created : {TABLE_NAME}")
 print(f"Rows loaded   : {row_count:,}")
 
 # Verify FlightNumber cleaning
-df = con.execute(f"""
-    SELECT DISTINCT FlightNumber
-    FROM {TABLE_NAME}
-    WHERE FlightNumber LIKE '%E%'
-    LIMIT 10
-""").df()
-print("\nCleaned FlightNumber samples:")
-print(df)
+#df = con.execute(f"""
+#    SELECT DISTINCT FlightNumber
+#    FROM {TABLE_NAME}
+#    WHERE FlightNumber LIKE '%E%'
+#    LIMIT 10
+#""").df()
+#print("\nCleaned FlightNumber samples:")
+#print(df)
 
 con.close()

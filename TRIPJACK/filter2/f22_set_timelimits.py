@@ -37,7 +37,7 @@ SPECIAL_L2_MAP = {
     code: limits[1] for code, limits in SPECIAL_NON_EU_TIME_LIMITS.items()
 }
 
-JUNE_2026 = pd.Timestamp("2026-06-20")
+AUG_2026 = pd.Timestamp("2026-08-20")
 
 
 # ────────────────────────────────────────────────
@@ -144,7 +144,7 @@ def calculate_timelimits_vectorized(df: pd.DataFrame) -> pd.DataFrame:
         )
 
     # Calculate year difference from June 2026
-    diff_years = (JUNE_2026 - agg["DepartureDate"]).dt.days / 365.25
+    diff_years = (AUG_2026 - agg["DepartureDate"]).dt.days / 365.25
 
     # Time limit check
     agg["IsTimeLimitL1"] = agg["limitL1"] >= diff_years
