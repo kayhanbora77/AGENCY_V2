@@ -3,7 +3,7 @@ import duckdb
 # =====================================================
 # CONFIG
 # =====================================================
-CSV_FILE = r"C:\Users\cagri\Desktop\OBilet\OBILET_MissConn.csv"
+CSV_FILE = r"C:\Users\cagri\Desktop\OBilet\OBILET_MissConn2.csv"
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
 TABLE_NAME = "OBILET_MISSCONNECTION"
 
@@ -12,10 +12,11 @@ con = duckdb.connect(str(DB_PATH))
 con.execute(f"""
 CREATE OR REPLACE TABLE {TABLE_NAME} AS
 SELECT
-    CAST(src.Id AS VARCHAR)                         AS Id,
+CAST(src.Id AS VARCHAR)                         AS Id,
     CAST(src.ConnectionID AS VARCHAR)               AS ConnectionID,
     CAST(src.PaxName AS VARCHAR)                    AS PaxName,
-    
+    CAST(src.BookingRef AS VARCHAR)                 AS BookingRef,
+    CAST(src.ETicketNo AS VARCHAR)                  AS ETicketNo,    
     -- Clean FlightNumber: remove trailing zeros, decimal point, and + sign from exponent
     CAST(
         REGEXP_REPLACE(
