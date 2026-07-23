@@ -18,16 +18,20 @@ MAX_AIRPORTS = 14
 
 BATCH_SIZE = 200_000
 
-AP1_AP5_WHERE_CLAUSE = """
-WHERE ((AIRPORT1 = AIRPORT5) AND (AIRPORT6 IS NULL))"""
+AP3_AP5_WHERE_CLAUSE = """
+WHERE ((AIRPORT3 = AIRPORT5) AND AIRPORT7 IS NOT NULL AND AIRPORT8 IS NULL)
+"""
 
 # ============================================================================
 # COLUMN LISTS
 # ============================================================================
+PREFIX_FN="FlightNo"
+PREFIX_DATE="DepartureDate"
+PREFIX_AP="Airport"
 
-FLIGHT_COLS = [f"FlightNumber{i + 1}" for i in range(MAX_FLIGHTS)]
-DATE_COLS = [f"DepartureDateLocal{i + 1}" for i in range(MAX_DATES)]
-AIRPORT_COLS = [f"Airport{i + 1}" for i in range(MAX_AIRPORTS)]
+FLIGHT_COLS = [f"{PREFIX_FN}{i + 1}" for i in range(MAX_FLIGHTS)]
+DATE_COLS = [f"{PREFIX_DATE}{i + 1}" for i in range(MAX_DATES)]
+AIRPORT_COLS = [f"{PREFIX_AP}{i + 1}" for i in range(MAX_AIRPORTS)]
 
 DYNAMIC_COLS = FLIGHT_COLS + DATE_COLS + AIRPORT_COLS
 
@@ -41,8 +45,8 @@ COL_IDX: dict = {}
 def get_flights_airports(row_list):
     flights = []
     for i in range(MAX_FLIGHTS):
-        fn = row_list[COL_IDX[f"FlightNumber{i + 1}"]]
-        fd = row_list[COL_IDX[f"DepartureDateLocal{i + 1}"]]
+        fn = row_list[COL_IDX[f"{PREFIX_FN}{i + 1}"]]
+        fd = row_list[COL_IDX[f"{PREFIX_DATE}{i + 1}"]]
         if (
             fn is not None
             and fd is not None
@@ -62,11 +66,11 @@ def get_flights_airports(row_list):
 
 def find_all_split_points(flights, airports):
     """
-    Rule 1 — Exactly 4 flights, Airport1 == Airport5:
-        e.g. BOM →  KWI → BAH → KWI → BOM
+    Rule 1 — Exactly 6 flights, Airport3 == Airport5:
+        e.g. MAA → BLR → AMS → MSP → AMS → BOM → MAA
         Split into:
-          Segment 1: FlightNumber1,FlightNumber2 | Airport1 → Airport2 → Airport3
-          Segment 2: FlightNumber3,FlightNumber4 | Airport3 → Airport4 → Airport5
+          Segment 1: FlightNumber1,FlightNumber2,FlightNumber3 | Airport1 → Airport2 → Airport3
+          Segment 2: FlightNumber4,FlightNumber5,FlightNumber6 | Airport3 → Airport4 → Airport5
     """
     n_f = len(flights)
     n_a = len(airports)
@@ -76,9 +80,9 @@ def find_all_split_points(flights, airports):
 
     split_points = set()
 
-    # ── Rule 1: exactly 4 flights and Airport1 == Airport5 ───────────────────
-    if n_f == 4 and n_a == 5 and airports[0] == airports[4]:
-        split_points.add(2)
+    # ── Rule 1: exactly 6 flights and Airport3 == Airport5 ───────────────────
+    if n_f == 6 and n_a == 7 and airports[2] == airports[4]:
+        split_points.add(3)
 
     return sorted(split_points)
 
@@ -90,11 +94,11 @@ def build_child_list(parent_list, all_cols, flights_slice, airports_slice, paren
         child[COL_IDX[c]] = None
 
     for i, (fn, fd) in enumerate(flights_slice):
-        child[COL_IDX[f"FlightNumber{i + 1}"]] = fn
-        child[COL_IDX[f"DepartureDateLocal{i + 1}"]] = fd
+        child[COL_IDX[f"{PREFIX_FN}{i + 1}"]] = fn
+        child[COL_IDX[f"{PREFIX_DATE}{i + 1}"]] = fd
 
     for i, ap in enumerate(airports_slice):
-        child[COL_IDX[f"Airport{i + 1}"]] = ap
+        child[COL_IDX[f"{PREFIX_AP}{i + 1}"]] = ap
 
     child[COL_IDX["id"]] = str(uuid.uuid4())
     child[COL_IDX["ParentId"]] = str(parent_id)
@@ -217,7 +221,7 @@ def process_table(db_path=DB_PATH, table=SOURCE_TABLE, batch_size=BATCH_SIZE):
     filtered_total = con.execute(f"""
         SELECT COUNT(*)
         FROM "{table}"
-        {AP1_AP5_WHERE_CLAUSE}
+        {AP3_AP5_WHERE_CLAUSE}
     """).fetchone()[0]
     print(f"\n  Step 2: Processing {filtered_total:,} 4-flight rows for split...")
 
@@ -230,7 +234,7 @@ def process_table(db_path=DB_PATH, table=SOURCE_TABLE, batch_size=BATCH_SIZE):
     cursor.execute(f"""
         SELECT {col_list}
         FROM "{table}"
-        {AP1_AP5_WHERE_CLAUSE}
+        {AP3_AP5_WHERE_CLAUSE}
     """)
 
     while True:
