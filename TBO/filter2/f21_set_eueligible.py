@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from zoneinfo import ZoneInfo
 from datetime import datetime, time
+import numpy as np  
 
 
 # ==================================================
@@ -20,7 +21,7 @@ class Config:
     threads: int = 8
     memory_limit: str = "8GB"
     temp_dir: str = r"C:\DuckDB\temp"
-    source_table: str = "TBO_CLEANED6"
+    source_table: str = "TBO_SPLIT12"
     target_table: str = "TA_STANDARD_TBO"
     read_chunk: int = 200_000
     parse_workers: int = 4
@@ -341,77 +342,120 @@ class ChunkProcessor:
                 .values,
             }
         )
-
+    
+    # ============================================
     """
-    Determines eligibility for EU 261/2004, UK 261/2004, and Turkish SHY regulations 
-    for each flight leg in the DataFrame.
+    Determines EU261-style flight delay/compensation eligibility for each leg,
+    evaluated at the journey (ConnectionID) level.
 
-    A journey is eligible under any of the following rule groups:
+    ORDER OF OPERATIONS
+    --------------------
+    1. RULE 1 (multi-leg "bookend" check):
+       For journeys with more than one leg, if the FIRST leg departs from a
+       non-EU airport AND the LAST leg arrives at a non-EU airport, the whole
+       journey is treated as a single "non-EU to non-EU" trip that just happens
+       to connect through Europe.
+           - Eligible = True  ONLY if a special carrier (SPECIAL_NON_EU_CARRIERS)
+             operates somewhere in the journey.
+           - Eligible = False otherwise, even if individual legs would have
+             qualified under Rule 2 (Rule 1 always wins when it applies).
 
-    1. EU Rule (EU261/2004):
-    - Outbound: Departs from an EU/EEA airport (any airline)
-    - Inbound: Arrives at an EU/EEA airport on an EU carrier OR a special non-EU carrier
-        (BA, TK, PC, JU, FH, VF, VS, XQ)
+    2. RULE 2 (per-leg check, used when Rule 1 does NOT apply):
+       Each leg is evaluated independently based on its own airports/carrier:
+           2.1 NonEU -> NonEU  : Eligible only if carrier is "special".
+           2.2 NonEU -> EU     : Eligible if carrier is "special" OR an EU carrier.
+           2.3 EU -> (EU/NonEU): Always eligible (EU departure rule).
+       If ANY leg in the journey is eligible, the ENTIRE journey is marked
+       eligible (an eligible leg elsewhere in the trip is enough).
 
-    2. UK Rule (UK261/2004):
-    - Outbound: Departs from a UK airport (any airline)
-    - Inbound: Arrives at a UK airport on a UK carrier (BA, VS) OR an EU carrier
+       Additional carve-outs are OR'd into the per-leg result:
+           - Turkish SHY rule: eligible if a Turkish carrier operates a leg
+             that touches Turkey (regardless of EU/non-EU classification).
+           - Serbian rule: eligible if a Serbian carrier operates a leg that
+             touches Serbia.
 
-    3. TR Rule (Turkish SHY):
-    - Operated by a Turkish carrier (TK, PC, FH, XQ, VF) AND touches a Turkish airport
-    - EXCLUSION: Purely domestic Turkish itineraries (all legs TR→TR) are NOT eligible
-
-    4. SRB Rule (Serbian Regulation):
-    - Operated by a Serbian carrier (JU) AND touches a Serbian airport (BEG, INI, KVO)
-
-    Eligibility Logic:
-    - If ANY leg in a multi-leg journey is eligible, the ENTIRE journey is marked eligible
-    - Exception: Purely domestic Turkish journeys (TR→TR→TR...) are ALWAYS excluded,
-    even if they contain eligible legs
-
-    Returns:
-        pd.Series: Boolean Series where True indicates the leg is part of an eligible journey
+    3. FINAL OVERRIDE - Domestic Turkey Exclusion:
+       If EVERY leg in the journey is Turkey -> Turkey (a purely domestic
+       Turkish trip), the journey is forced to Eligible = False, no matter
+       what Rule 1 or Rule 2 decided. This override is applied last and
+       always wins.
     """
     def _vectorized_eligibility(self, df: pd.DataFrame) -> pd.Series:
         if df.empty:
             return pd.Series(dtype=bool)
 
         uid_col = "ConnectionID"
-        sorted_legs = df.sort_values("LegNo", kind="mergesort")
+        airline = df["AirlineCode"]
+        from_ap = df["FromAirport"]
+        to_ap = df["ToAirport"]
 
-        leg_is_tr_domestic = df["FromAirport"].isin(self.tr_airports) & df["ToAirport"].isin(self.tr_airports)
-        all_legs_tr_domestic = leg_is_tr_domestic.groupby(df[uid_col], sort=False).all()
-        is_domestic_tr = df[uid_col].map(all_legs_tr_domestic).fillna(False).astype(bool)
-        
-        # --- Per-leg eligibility flags (order doesn't matter here) ---
-        is_uk_or_eu_carrier = df["AirlineCode"].isin(UK_CARRIERS | self.eu_carriers)
-        touches_uk = df["FromAirport"].isin(self.uk_airports) | df["ToAirport"].isin(self.uk_airports)
-        uk_leg_eligible = is_uk_or_eu_carrier & touches_uk
+        from_is_eu = from_ap.isin(self.eu_airports)
+        to_is_eu = to_ap.isin(self.eu_airports)
+        is_special = airline.isin(SPECIAL_NON_EU_CARRIERS)
+        is_eu_carrier = airline.isin(self.eu_carriers)
 
-        is_tr_carrier = df["AirlineCode"].isin(TR_CARRIERS)
-        touches_tr = df["FromAirport"].isin(self.tr_airports) | df["ToAirport"].isin(self.tr_airports)
-        tr_leg_eligible = is_tr_carrier & touches_tr  # domestic-TR exclusion applied at journey level below
+        grp_uid = df[uid_col]
 
-        is_srb_carrier = df["AirlineCode"].isin(SRB_CARRIERS)
-        touches_srb = df["FromAirport"].isin(SRB_AIRPORTS) | df["ToAirport"].isin(SRB_AIRPORTS)
+        # --- 1. Domestic Turkey Exclusion (unchanged from before) ---
+        leg_is_tr_domestic = from_ap.isin(self.tr_airports) & to_ap.isin(self.tr_airports)
+        is_purely_tr_domestic = leg_is_tr_domestic.groupby(grp_uid, sort=False).all()
+        is_domestic_tr = grp_uid.map(is_purely_tr_domestic).fillna(False)
+
+        # --- Turkish SHY: Turkish carrier AND touches Turkey ---
+        is_tr_carrier = airline.isin(TR_CARRIERS)
+        touches_tr = from_ap.isin(self.tr_airports) | to_ap.isin(self.tr_airports)
+        tr_leg_eligible = is_tr_carrier & touches_tr
+
+        # --- Serbian: Serbian carrier AND touches Serbia ---
+        is_srb_carrier = airline.isin(SRB_CARRIERS)
+        touches_srb = from_ap.isin(SRB_AIRPORTS) | to_ap.isin(SRB_AIRPORTS)
         srb_leg_eligible = is_srb_carrier & touches_srb
 
-        eu_dep = df["FromAirport"].isin(self.eu_airports)
-        eu_arr = df["ToAirport"].isin(self.eu_airports)
-        eu_carrier = df["AirlineCode"].isin(self.eu_carriers)
-        is_special = df["AirlineCode"].isin(SPECIAL_NON_EU_CARRIERS)
-        inbound_ok = (~eu_dep) & eu_arr & (eu_carrier | is_special)
-        eu_leg_eligible = eu_dep | inbound_ok
+        # ---- Journey structure: is it multi-leg? what are first/last legs? ----
+        leg_counts = grp_uid.map(grp_uid.value_counts())
+        is_multi = leg_counts > 1
 
-        leg_eligible = uk_leg_eligible | tr_leg_eligible | srb_leg_eligible | eu_leg_eligible
+        first_idx = df.groupby(uid_col, sort=False)["LegNo"].idxmin()
+        last_idx = df.groupby(uid_col, sort=False)["LegNo"].idxmax()
 
-        # --- If ANY leg in the journey is eligible, mark the whole journey eligible ---
-        journey_eligible = leg_eligible.groupby(df[uid_col], sort=False).any()
-        journey_eligible_mapped = df[uid_col].map(journey_eligible).fillna(False).astype(bool)
+        first_from_noneu_by_uid = ~from_ap.loc[first_idx].isin(self.eu_airports)
+        first_from_noneu_by_uid.index = df.loc[first_idx, uid_col].values
 
-        return journey_eligible_mapped & (~is_domestic_tr)
+        last_to_noneu_by_uid = ~to_ap.loc[last_idx].isin(self.eu_airports)
+        last_to_noneu_by_uid.index = df.loc[last_idx, uid_col].values
 
+        first_from_noneu = grp_uid.map(first_from_noneu_by_uid).fillna(False)
+        last_to_noneu = grp_uid.map(last_to_noneu_by_uid).fillna(False)
 
+        # ---- RULE 1: multi-leg, first-leg-from-nonEU AND last-leg-to-nonEU ----
+        rule1_applies = is_multi & first_from_noneu & last_to_noneu
+
+        journey_has_special = is_special.groupby(grp_uid, sort=False).transform("any")
+        rule1_eligible = rule1_applies & journey_has_special
+
+        # ---- RULE 2: leg-by-leg evaluation (for journeys NOT covered by rule 1) ----
+        rule2_leg_eligible = pd.Series(False, index=df.index)
+
+        cond_2_1 = (~from_is_eu) & (~to_is_eu)   # NonEU -> NonEU
+        cond_2_2 = (~from_is_eu) & to_is_eu      # NonEU -> EU
+        cond_2_3 = from_is_eu                     # EU -> EU or NonEU
+
+        rule2_leg_eligible.loc[cond_2_1] = is_special.loc[cond_2_1]
+        rule2_leg_eligible.loc[cond_2_2] = (is_special | is_eu_carrier).loc[cond_2_2]
+        rule2_leg_eligible.loc[cond_2_3] = True
+
+        # fold in TR-SHY and Serbian carve-outs as additional per-leg eligibility triggers
+        rule2_leg_eligible = rule2_leg_eligible | tr_leg_eligible | srb_leg_eligible
+
+        # roll up leg-level rule2 result to the journey: any eligible leg -> journey eligible
+        rule2_journey_eligible = rule2_leg_eligible.groupby(grp_uid, sort=False).transform("any")
+
+        # ---- Combine rule1 (wins where it applies) with rule2 ----
+        combined_eligible = np.where(rule1_applies, rule1_eligible, rule2_journey_eligible)
+        combined_eligible = pd.Series(combined_eligible, index=df.index).astype(bool)
+
+        # ---- Final: apply Domestic-Turkey veto over everything ----
+        return combined_eligible & (~is_domestic_tr)
 # ==================================================
 # IMPORTER / ORCHESTRATOR
 # ==================================================

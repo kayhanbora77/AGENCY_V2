@@ -12,7 +12,7 @@ COPY (
         CASE WHEN IsSingleFlight THEN 1 ELSE 0 END AS IsSingleFlight
     FROM TA_STANDARD_TBO
 )
-TO 'C:/Users/cagri/Desktop/TBO/TA_STANDARD_TBO.csv'
+TO 'C:/Users/cagri/Desktop/Tripjack/TA_STANDARD_TRIPJACK.csv'
 WITH (
     HEADER true,
     DELIMITER ',',

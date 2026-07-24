@@ -7,16 +7,16 @@ from pathlib import Path
 # ==================================================
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
 CSV_PATH = r"C:\Users\cagri\Desktop\Agency_Data\TBO\filter-0\BookingData_DeptDate_01Aug2025_30Apr2026.csv"
-
+TABLE_NAME = "TBO_RAW"
 
 # ==================================================
 # CREATE TABLE
 # ==================================================
 def create_table(con):
-    con.execute("""
-        DROP TABLE IF EXISTS TBO_RAW;
+    con.execute(f"""
+        DROP TABLE IF EXISTS {TABLE_NAME};
         
-        CREATE TABLE TBO_RAW (
+        CREATE TABLE {TABLE_NAME} (
             id                   UUID DEFAULT gen_random_uuid(),
             PaxName              VARCHAR,
             BookingRef           VARCHAR,
@@ -71,12 +71,12 @@ def load_and_insert(con):
 
     print("Columns:", df.columns.tolist())
 
-    con.execute("DELETE FROM TBO_RAW")
+    con.execute(f"DELETE FROM {TABLE_NAME}")
 
     con.register("temp_df", df)
 
-    con.execute("""
-        INSERT INTO TBO_RAW (
+    con.execute(f"""
+        INSERT INTO {TABLE_NAME} (
             PaxName, BookingRef, ETicketNo, ClientCode, Airline, JourneyType,
             FlightNumber1, FlightNumber2, FlightNumber3, FlightNumber4, 
             FlightNumber5, FlightNumber6, FlightNumber7,
@@ -116,7 +116,7 @@ def main():
         create_table(con)
         load_and_insert(con)
 
-        count = con.execute("SELECT COUNT(*) FROM TBO_RAW").fetchone()[0]
+        count = con.execute(f"SELECT COUNT(*) FROM {TABLE_NAME}").fetchone()[0]
         print(f"\n🎉 Final row count: {count:,}")
 
         # Check how many dates were successfully parsed
@@ -124,19 +124,9 @@ def main():
         for i in range(1, 8):
             col = f"DepartureDateLocal{i}"
             valid = con.execute(
-                f"SELECT COUNT(*) FROM TBO_RAW WHERE {col} IS NOT NULL"
+                f"SELECT COUNT(*) FROM {TABLE_NAME} WHERE {col} IS NOT NULL"
             ).fetchone()[0]
             print(f"  {col}: {valid:,} valid timestamps")
-
-        # Show sample
-        print("\nSample data:")
-        con.sql("""
-            SELECT id, PaxName, DepartureDateLocal1 
-            FROM TBO_RAW 
-            WHERE DepartureDateLocal1 IS NOT NULL 
-            LIMIT 5
-        """).show()
-
     except Exception as e:
         print(f"❌ Error: {e}")
     finally:
