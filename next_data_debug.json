@@ -1,0 +1,259 @@
+{
+  "props": {
+    "isServer": true,
+    "initialState": {
+      "app": {
+        "user": {},
+        "appHost": "http://www.flightstats.com/v2"
+      },
+      "elasticSearch": {},
+      "flick": {},
+      "flightTracker": {
+        "route": {
+          "header": {},
+          "flights": [],
+          "showCodeshares": null
+        },
+        "flightLoading": false,
+        "otherDays": [
+          {
+            "date1": "22-Jul",
+            "date2": "Jul-22",
+            "day": "Wednesday",
+            "year": "2026",
+            "flights": []
+          },
+          {
+            "date1": "23-Jul",
+            "date2": "Jul-23",
+            "day": "Thursday",
+            "year": "2026",
+            "flights": [
+              {
+                "arrivalAirport": {
+                  "city": "Kolkata",
+                  "fs": "CCU",
+                  "iata": "CCU",
+                  "name": "Kolkata Netaji Subhas Chandra Bose Intl Airport",
+                  "state": "",
+                  "country": "IN"
+                },
+                "arrivalTime": "12:10",
+                "arrivalTimeAmPm": "AM",
+                "arrivalTime24": "00:10",
+                "arrivalTimezone": "IST",
+                "departureAirport": {
+                  "city": "Kunming",
+                  "fs": "KMG",
+                  "iata": "KMG",
+                  "name": "Kunming Changshui International Airport",
+                  "state": "",
+                  "country": "CN"
+                },
+                "departureTime": "11:55",
+                "departureTimeAmPm": "PM",
+                "departureTime24": "23:55",
+                "departureTimezone": "CST",
+                "url": "/flight-tracker/MU/555?year=2026&month=07&date=23&flightId=1397362783",
+                "sortTime": "2026-07-23T15:55:00.000Z"
+              }
+            ]
+          },
+          {
+            "date1": "24-Jul",
+            "date2": "Jul-24",
+            "day": "Friday",
+            "year": "2026",
+            "flights": [
+              {
+                "arrivalAirport": {
+                  "city": "Kolkata",
+                  "fs": "CCU",
+                  "iata": "CCU",
+                  "name": "Kolkata Netaji Subhas Chandra Bose Intl Airport",
+                  "state": "",
+                  "country": "IN"
+                },
+                "arrivalTime": "12:10",
+                "arrivalTimeAmPm": "AM",
+                "arrivalTime24": "00:10",
+                "arrivalTimezone": "IST",
+                "departureAirport": {
+                  "city": "Kunming",
+                  "fs": "KMG",
+                  "iata": "KMG",
+                  "name": "Kunming Changshui International Airport",
+                  "state": "",
+                  "country": "CN"
+                },
+                "departureTime": "11:55",
+                "departureTimeAmPm": "PM",
+                "departureTime24": "23:55",
+                "departureTimezone": "CST",
+                "url": "/flight-tracker/MU/555?year=2026&month=07&date=24&flightId=1397576351",
+                "sortTime": "2026-07-24T15:55:00.000Z"
+              }
+            ]
+          },
+          {
+            "date1": "25-Jul",
+            "date2": "Jul-25",
+            "day": "Saturday",
+            "year": "2026",
+            "flights": [
+              {
+                "arrivalAirport": {
+                  "city": "Kolkata",
+                  "fs": "CCU",
+                  "iata": "CCU",
+                  "name": "Kolkata Netaji Subhas Chandra Bose Intl Airport",
+                  "state": "",
+                  "country": "IN"
+                },
+                "arrivalTime": "12:10",
+                "arrivalTimeAmPm": "AM",
+                "arrivalTime24": "00:10",
+                "arrivalTimezone": "IST",
+                "departureAirport": {
+                  "city": "Kunming",
+                  "fs": "KMG",
+                  "iata": "KMG",
+                  "name": "Kunming Changshui International Airport",
+                  "state": "",
+                  "country": "CN"
+                },
+                "departureTime": "11:55",
+                "departureTimeAmPm": "PM",
+                "departureTime24": "23:55",
+                "departureTimezone": "CST",
+                "url": "/flight-tracker/MU/555?year=2026&month=07&date=25&flightId=1397782807",
+                "sortTime": "2026-07-25T15:55:00.000Z"
+              }
+            ]
+          },
+          {
+            "date1": "26-Jul",
+            "date2": "Jul-26",
+            "day": "Sunday",
+            "year": "2026",
+            "flights": [
+              {
+                "arrivalAirport": {
+                  "city": "Kolkata",
+                  "fs": "CCU",
+                  "iata": "CCU",
+                  "name": "Kolkata Netaji Subhas Chandra Bose Intl Airport",
+                  "state": "",
+                  "country": "IN"
+                },
+                "arrivalTime": "12:10",
+                "arrivalTimeAmPm": "AM",
+                "arrivalTime24": "00:10",
+                "arrivalTimezone": "IST",
+                "departureAirport": {
+                  "city": "Kunming",
+                  "fs": "KMG",
+                  "iata": "KMG",
+                  "name": "Kunming Changshui International Airport",
+                  "state": "",
+                  "country": "CN"
+                },
+                "departureTime": "11:55",
+                "departureTimeAmPm": "PM",
+                "departureTime24": "23:55",
+                "departureTimezone": "CST",
+                "url": "/flight-tracker/MU/555?year=2026&month=07&date=26&flightId=1397997350",
+                "sortTime": "2026-07-26T15:55:00.000Z"
+              }
+            ]
+          },
+          {
+            "date1": "27-Jul",
+            "date2": "Jul-27",
+            "day": "Monday",
+            "year": "2026",
+            "flights": [
+              {
+                "arrivalAirport": {
+                  "city": "Kolkata",
+                  "fs": "CCU",
+                  "iata": "CCU",
+                  "name": "Kolkata Netaji Subhas Chandra Bose Intl Airport",
+                  "state": "",
+                  "country": "IN"
+                },
+                "arrivalTime": "12:10",
+                "arrivalTimeAmPm": "AM",
+                "arrivalTime24": "00:10",
+                "arrivalTimezone": "IST",
+                "departureAirport": {
+                  "city": "Kunming",
+                  "fs": "KMG",
+                  "iata": "KMG",
+                  "name": "Kunming Changshui International Airport",
+                  "state": "",
+                  "country": "CN"
+                },
+                "departureTime": "11:55",
+                "departureTimeAmPm": "PM",
+                "departureTime24": "23:55",
+                "departureTimezone": "CST",
+                "url": "/flight-tracker/MU/555?year=2026&month=07&date=27&flightId=1398220417",
+                "sortTime": "2026-07-27T15:55:00.000Z"
+              }
+            ]
+          },
+          {
+            "date1": "28-Jul",
+            "date2": "Jul-28",
+            "day": "Tuesday",
+            "year": "2026",
+            "flights": []
+          }
+        ]
+      },
+      "loading": {
+        "LOAD_FLIGHT_TRACKER_FLIGHT": false,
+        "LOAD_FLIGHT_TRACKER_OTHER_DAYS": false
+      },
+      "error": {
+        "LOAD_FLIGHT_TRACKER_FLIGHT": "",
+        "LOAD_FLIGHT_TRACKER_OTHER_DAYS": ""
+      }
+    },
+    "initialProps": {
+      "user": {},
+      "pageProps": {
+        "params": {
+          "carrierCode": "MU",
+          "flightNumber": "555",
+          "year": "2026",
+          "month": "7",
+          "date": "25",
+          "flightId": "1397717192"
+        },
+        "isHistoricalFlight": false,
+        "isOutOfDateRange": false,
+        "head": {
+          "title": "MU555 - MU 555 Flight Tracker",
+          "description": "MU555 Flight Tracker - Track the real-time flight status of MU 555 live using the FlightStats Global Flight Tracker. See if your flight has been delayed or cancelled and track the live position on a map.",
+          "keywords": "555 flight tracker, 555 flight status, MU 555 flight tracker, MU 555 flight status, MU 555 map, MU 555, MU555, 555",
+          "canonical": "/flight-tracker/MU/555",
+          "noIndex": false
+        },
+        "userAgent": "Mozilla/5.0",
+        "hostname": "www.flightstats.com"
+      }
+    }
+  },
+  "page": "/flight-tracker",
+  "query": {
+    "carrierCode": "MU",
+    "flightNumber": "555",
+    "flightId": "1397717192",
+    "year": "2026",
+    "month": "7",
+    "date": "25"
+  },
+  "buildId": "fxg_OvyN4fPj_HRFFJww2"
+}
