@@ -9,7 +9,7 @@ HEADERS = {"User-Agent": "Mozilla/5.0"}
 HOURS = [0, 6, 12, 18]
 
 AIRPORTS = [
-"IST"
+"DUB"
 ]
 
 def request_with_backoff(url, params=None, max_retries=2):
@@ -20,9 +20,9 @@ def request_with_backoff(url, params=None, max_retries=2):
             print(f"  403 on {url} -- backing off {wait}s (attempt {attempt+1}/{max_retries})")
             time.sleep(wait)
             continue
-        if r.status_code in (500,502,503,504):
+        if r.status_code in (500, 502, 503, 504):
             print(f"  {r.status_code} on {url} -- skipping, no retry")
-            r.raise_for_status()
+            return None  # signal "skip", don't raise -- caller won't count this as a failure
         r.raise_for_status()
         return r.json().get("data", {})
     raise RuntimeError(f"Repeated failures, giving up on {url}")
@@ -31,7 +31,8 @@ def request_with_backoff(url, params=None, max_retries=2):
 def fetch_arrivals(airport, date, hour):
     #url = f"https://www.flightstats.com/v2/api-next/flight-tracker/arr/{airport}/{date.year}/{date.month}/{date.day}/{hour}"
     url = f"https://www.flightstats.com/v2/api-next/flight-tracker/dep/{airport}/{date.year}/{date.month}/{date.day}/{hour}"
-    return request_with_backoff(url, {"carrierCode": "", "numHours": 6}).get("flights", [])
+    data = request_with_backoff(url, {"carrierCode": "", "numHours": 6})
+    return data.get("flights", []) if data else []    
 
 def fetch_status(carrier_fs, flight_number, date):
     url = f"https://www.flightstats.com/v2/api-next/flight-tracker/{carrier_fs}/{flight_number}/{date.year}/{date.month}/{date.day}"
@@ -45,8 +46,8 @@ def extract_record(base, status_data):
     arr_actual = sched.get("estimatedActualArrival") if sched.get("estimatedActualArrivalTitle") == "Actual" else None
     return {
         **base,
-        "departure_airport_code": status_data.get("departureAirport", {}).get("fs"),
-        "arrival_airport_code": status_data.get("arrivalAirport", {}).get("fs"),
+        "departure_airport_iatacode": status_data.get("departureAirport", {}).get("fs"),
+        "arrival_airport_iatacode": status_data.get("arrivalAirport", {}).get("fs"),
         "scheduled_departure": sched.get("scheduledDeparture"),
         "actual_departure": dep_actual,
         "scheduled_arrival": sched.get("scheduledArrival"),
@@ -70,11 +71,14 @@ def process_flight(f, date, target_airport):
         "flight_number": fs + str(num),
         "carrier_code": fs,
         "airline": carrier.get("name"),
-        "origin_city": f.get("airport", {}).get("city"),
-        "origin_airport_code": f.get("airport", {}).get("fs"),
+        "destination_airport_iatacode": f.get("airport", {}).get("fs"),  # renamed + fixed key
     }
     status_data = fetch_status(fs, num, date)
-    return extract_record(base, status_data)
+    if status_data is None:  # skipped due to 500
+        return None
+    record = extract_record(base, status_data)
+    record["departure_airport_iatacode"] = target_airport  # trust the queried airport, not FlightStats' code
+    return record
 
 def build_dataframe(records):
     df = pd.DataFrame(records)
@@ -82,8 +86,8 @@ def build_dataframe(records):
         "date": "FlightDate",
         "flight_number": "FlightNumber",
         "carrier_code": "AirlineCode",
-        "departure_airport_code": "DepartureAirport",
-        "arrival_airport_code": "ArrivalAirport",
+        "departure_airport_iatacode": "DepartureAirport",
+        "arrival_airport_iatacode": "ArrivalAirport",
         "scheduled_departure": "ScheduledDeparture",
         "actual_departure": "ActualDeparture",
         "scheduled_arrival": "ScheduledArrival",
@@ -119,7 +123,7 @@ def save_incremental(conn, records):
         return 0, 0
     df = build_dataframe(records)
     conn.register("df", df)
-    conn.execute("INSERT INTO FLIGHTS SELECT * FROM df")
+    # conn.execute("INSERT INTO FLIGHTS SELECT * FROM df")
     conn.execute("""
         INSERT INTO IRREGULAR_FLIGHTS
         SELECT * FROM df
