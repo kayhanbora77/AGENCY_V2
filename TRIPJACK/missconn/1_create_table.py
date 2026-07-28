@@ -3,9 +3,9 @@ import duckdb
 # =====================================================
 # CONFIG
 # =====================================================
-CSV_FILE = r"C:\Users\cagri\Desktop\MiddleEast\MiddleEast_MissConn.csv"
+CSV_FILE = r"C:\Users\cagri\Desktop\Tripjack\Tripjack_MissConn\Tripjack_MissConn.csv"
 DB_PATH = r"C:\DuckDB\my_db.duckdb"
-TABLE_NAME = "MIDDLEEAST_MISSCONNECTION"
+TABLE_NAME = "TRIPJACK_MISSCONNECTION"
 
 con = duckdb.connect(str(DB_PATH))
 
