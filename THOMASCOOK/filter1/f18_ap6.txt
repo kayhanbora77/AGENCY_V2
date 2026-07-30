@@ -1,0 +1,9 @@
+INSERT INTO thomascook_reject
+SELECT
+    *,
+    'Airport6 IS NOT NULL' AS RejectionReason
+FROM thomascook_split6
+WHERE airport6 IS NOT NULL;
+
+
+DELETE FROM thomascook_split6 WHERE airport6 IS NOT NULL;

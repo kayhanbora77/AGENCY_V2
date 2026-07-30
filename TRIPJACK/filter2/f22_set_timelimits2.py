@@ -18,7 +18,7 @@ SOURCE_TABLE = "TA_STANDARD_TRIPJACK"
 # ────────────────────────────────────────────────
 # CONSTANTS
 # ────────────────────────────────────────────────
-SPECIAL_NON_EU_TIME_LIMITS = frozenset({
+SPECIAL_NON_EU_TIME_LIMITS = {
     "BA": (6, 6),
     "TK": (2, 2),
     "PC": (2, 2),
@@ -27,7 +27,7 @@ SPECIAL_NON_EU_TIME_LIMITS = frozenset({
     "VF": (2, 2),
     "VS": (6, 6),
     "XQ": (2, 2),
-})
+}
 
 # Pre-split into separate mappings for vectorized lookup
 SPECIAL_L1_MAP = {
@@ -229,7 +229,7 @@ def main():
 
     try:
         eu_airports_set = eu_airports(con)
-        df = get_eueligible_data(con)
+        df = eueligible_data(con)
 
         if df is not None:
             df_updates = calculate_timelimits_vectorized(df, eu_airports_set)
